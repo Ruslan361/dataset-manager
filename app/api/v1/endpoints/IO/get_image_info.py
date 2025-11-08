@@ -1,10 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.models.image import Image
+from app.service.IO.image_service import ImageService
 from app.db.session import get_db
-import logging
 from app.schemas.image import ImageResponse
+import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -15,12 +14,11 @@ async def get_image_info(
     db: AsyncSession = Depends(get_db)
 ):
     """Получить информацию об изображении"""
+    image_service = ImageService(db)
+    
     try:
-        # Поиск изображения в БД
-        image_query = select(Image).where(Image.id == image_id)
-        result = await db.execute(image_query)
-        image = result.scalar_one_or_none()
-        
+        # Получение изображения через сервис
+        image = await image_service.get_image_by_id(image_id)
         if not image:
             raise HTTPException(
                 status_code=404,

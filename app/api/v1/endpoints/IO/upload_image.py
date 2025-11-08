@@ -1,17 +1,13 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.image import ResultResponse, ImageUploadForm
-from app.models.image import Image
+from app.service.IO.image_service import ImageService
+from app.service.IO.file_services import FileService
 from app.db.session import get_db
 import json
-import aiofiles
-import uuid
-from pathlib import Path
 import logging
-import os
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 @router.post("/upload", response_model=ResultResponse)
@@ -20,68 +16,50 @@ async def upload_image(
     form_data: str = Form(...),
     db: AsyncSession = Depends(get_db)
 ):
+    """Загрузка изображения"""
+    image_service = ImageService(db)
     file_path = None
     
     try:
-        upload_form = await validate_upload_data(file, form_data)
+        # Валидация данных загрузки
+        upload_form = await _validate_upload_data(file, form_data)
 
         # Создание директории для сохранения
-        upload_dir = Path(f"uploads/images/{upload_form.dataset_id}")
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_dir = FileService.create_upload_directory(upload_form.dataset_id)
         
         # Генерация уникального имени файла
-        file_extension = Path(file.filename).suffix
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        unique_filename = FileService.generate_unique_filename(file.filename)
         file_path = upload_dir / unique_filename
         
         # Сохранение файла
-        async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            await f.write(content)
+        await FileService.save_upload_file(file, file_path)
         
-        logger.info(f"File saved: {file_path}")
-
         # Создание записи в БД
-        image = Image(
+        image = await image_service.create_image(
             filename=unique_filename,
             original_filename=file.filename,
             dataset_id=upload_form.dataset_id
         )
-        db.add(image)
-        await db.commit()
-        await db.refresh(image)
 
         return ResultResponse(
             success=True,
-            message="Image saved"
+            message="Image saved",
+            data={"image_id": image.id}
         )
         
     except HTTPException:
         # Если произошла HTTP ошибка, делаем rollback
-        await rollback_operations(db, file_path)
+        if file_path:
+            FileService.remove_file(file_path)
         raise
     except Exception as e:
         # Если произошла любая другая ошибка
         logger.error(f"Error uploading image: {str(e)}")
-        await rollback_operations(db, file_path)
+        if file_path:
+            FileService.remove_file(file_path)
         raise HTTPException(status_code=500, detail="Error uploading image")
 
-async def rollback_operations(db: AsyncSession, file_path: Path = None):
-    """Откат операций при ошибке"""
-    try:
-        # Откат транзакции БД
-        await db.rollback()
-        logger.info("Database transaction rolled back")
-        
-        # Удаление файла если он был создан
-        if file_path and file_path.exists():
-            os.remove(file_path)
-            logger.info(f"File removed: {file_path}")
-            
-    except Exception as rollback_error:
-        logger.error(f"Error during rollback: {str(rollback_error)}")
-
-async def validate_upload_data(file: UploadFile, form_data: str) -> ImageUploadForm:
+async def _validate_upload_data(file: UploadFile, form_data: str) -> ImageUploadForm:
     """Валидация данных загрузки"""
     try:
         data = json.loads(form_data)

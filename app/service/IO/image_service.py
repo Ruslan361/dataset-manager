@@ -9,7 +9,7 @@ import shutil
 
 from app.models.image import Image
 from app.models.dataset import Dataset
-from app.services.base_service import BaseService
+from app.service.IO.base_service import BaseService
 
 logger = logging.getLogger(__name__)
 

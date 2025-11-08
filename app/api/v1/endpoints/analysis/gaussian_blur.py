@@ -6,6 +6,7 @@ from app.models.image import Image
 from app.db.session import get_db
 from app.service.image_processor import ImageProcessor
 import cv2
+import numpy as np
 import logging
 from pathlib import Path
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ class GaussianBlurRequest(BaseModel):
     kernel_size: int = 3
     sigma_x: float = 0.0
     sigma_y: float = 0.0
+    apply_viridis: bool = True  # Новый параметр для раскрашивания
 
 @router.post("/gaussian-blur/{image_id}")
 async def apply_gaussian_blur(
@@ -66,20 +68,37 @@ async def apply_gaussian_blur(
             sigmaY=blur_params.sigma_y
         )
         
-        # Кодирование результата в PNG
-        success, encoded_image = cv2.imencode('.png', blurred_l_channel)
+        # Применение раскрашивания viridis, если требуется
+        if blur_params.apply_viridis:
+            # Нормализация L-канала к диапазону 0-255
+            normalized = cv2.normalize(blurred_l_channel, None, 0, 255, cv2.NORM_MINMAX)
+            normalized = normalized.astype(np.uint8)
+            
+            # Применение colormap viridis
+            viridis_colored = cv2.applyColorMap(normalized, cv2.COLORMAP_VIRIDIS)
+            
+            # Кодирование цветного изображения
+            success, encoded_image = cv2.imencode('.png', viridis_colored)
+            media_type = "image/png"
+            log_message = f"Applied Gaussian blur with viridis colormap to image {image_id}"
+        else:
+            # Кодирование обычного L-канала (grayscale)
+            success, encoded_image = cv2.imencode('.png', blurred_l_channel)
+            media_type = "image/png"
+            log_message = f"Applied Gaussian blur to image {image_id}"
+        
         if not success:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to encode processed image"
             )
         
-        logger.info(f"Applied Gaussian blur to image {image_id}")
+        logger.info(log_message)
         
         # Возвращаем обработанное изображение
         return Response(
             content=encoded_image.tobytes(),
-            media_type="image/png"
+            media_type=media_type
         )
         
     except HTTPException:

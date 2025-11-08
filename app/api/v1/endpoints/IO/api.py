@@ -14,3 +14,4 @@ router.include_router(get_images_from_dataset.router, prefix="/dataset", tags=["
 router.include_router(remove_image.router, prefix="/image", tags=["image"])
 router.include_router(download_image.router, prefix="/image", tags=["image"])
 router.include_router(get_image_info.router, prefix="/image", tags=["image"])
+#router.include_router(archive.router, prefix="/archive", tags=["archive"])

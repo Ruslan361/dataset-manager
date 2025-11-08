@@ -1,11 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.models.image import Image
+from app.service.IO.image_service import ImageService
 from app.db.session import get_db
 import logging
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -15,23 +13,21 @@ async def download_image(
     image_id: int,
     db: AsyncSession = Depends(get_db)
 ):
+    """Скачивание изображения по ID"""
+    image_service = ImageService(db)
+    
     try:
-        # Поиск изображения в БД
-        image_query = select(Image).where(Image.id == image_id)
-        result = await db.execute(image_query)
-        image = result.scalar_one_or_none()
-        
+        # Получение изображения из БД
+        image = await image_service.get_image_by_id(image_id)
         if not image:
             raise HTTPException(
                 status_code=404,
                 detail=f"Image with id {image_id} not found"
             )
         
-        # Путь к файлу изображения
-        file_path = Path(f"uploads/images/{image.dataset_id}/{image.filename}")
-        
-        # Проверка существования файла
-        if not file_path.exists() or not file_path.is_file():
+        # Получение пути к файлу и проверка существования
+        file_path = image_service.get_image_file_path(image)
+        if not image_service.validate_file_exists(file_path):
             logger.error(f"File not found: {file_path}")
             raise HTTPException(
                 status_code=404,
