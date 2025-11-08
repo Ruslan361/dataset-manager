@@ -19,10 +19,27 @@ class FileService:
     
     @staticmethod
     def create_upload_directory(dataset_id: int) -> Path:
-        """Создание директории для загрузки"""
+        """Создание директории для загрузки изображений"""
         upload_dir = Path(f"uploads/images/{dataset_id}")
         upload_dir.mkdir(parents=True, exist_ok=True)
         return upload_dir
+
+    @staticmethod
+    def create_result_directory(dataset_id: int) -> Path:
+        """Создание директории для сохранения результатов"""
+        result_dir = Path(f"uploads/results/{dataset_id}")
+        result_dir.mkdir(parents=True, exist_ok=True)
+        return result_dir
+
+    @staticmethod
+    def get_image_path(dataset_id: int, filename: str) -> Path:
+        """Получение пути к файлу изображения"""
+        return Path(f"uploads/images/{dataset_id}/{filename}")
+
+    @staticmethod
+    def get_result_path(dataset_id: int, filename: str) -> Path:
+        """Получение пути к файлу результата"""
+        return Path(f"uploads/results/{dataset_id}/{filename}")
     
     @staticmethod
     async def save_upload_file(file: UploadFile, file_path: Path) -> None:

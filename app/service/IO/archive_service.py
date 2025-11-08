@@ -2,7 +2,8 @@ import zipfile
 import json
 from pathlib import Path
 import tempfile
-import shutil
+import aiofiles
+import aiofiles.os
 from typing import Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,7 @@ from app.service.IO.dataset_service import DatasetService
 from app.service.IO.image_service import ImageService
 from app.service.IO.result_service import ResultService
 from app.models.dataset import Dataset
-from app.schemas.dataset import DatasetCreate
+from app.schemas.dataset import CreateDatasetForm
 from app.service.IO.file_services import FileService
 
 
@@ -27,22 +28,23 @@ class ArchiveService:
         Exports a dataset to a zip archive.
         The archive will contain images, results, and a manifest.json file.
         """
-        dataset = await self.dataset_service.get_dataset(dataset_id)
+        dataset = await self.dataset_service.get_dataset_by_id(dataset_id)
         if not dataset:
             raise ValueError("Dataset not found")
 
         images = await self.image_service.get_images_by_dataset(dataset_id)
         
-        with tempfile.TemporaryDirectory() as temp_dir_str:
+        temp_dir_str = tempfile.mkdtemp()
+        try:
             temp_dir = Path(temp_dir_str)
             images_dir = temp_dir / "images"
             results_dir = temp_dir / "results"
-            images_dir.mkdir()
-            results_dir.mkdir()
+            await aiofiles.os.mkdir(images_dir)
+            await aiofiles.os.mkdir(results_dir)
 
             manifest: Dict[str, Any] = {
                 "dataset": {
-                    "name": dataset.name,
+                    "title": dataset.title,
                     "description": dataset.description,
                 },
                 "images": [],
@@ -52,7 +54,8 @@ class ArchiveService:
                 # Copy image file
                 image_path = FileService.get_image_path(dataset.id, image.filename)
                 if image_path.exists():
-                    shutil.copy(image_path, images_dir / image.filename)
+                    await aiofiles.os.stat(image_path) # check if file is accessible
+                    await self._copy_file(image_path, images_dir / image.filename)
 
                 image_manifest = {
                     "filename": image.filename,
@@ -64,7 +67,7 @@ class ArchiveService:
                 for result in results:
                     result_path = FileService.get_result_path(dataset.id, result.filename)
                     if result_path.exists():
-                        shutil.copy(result_path, results_dir / result.filename)
+                        await self._copy_file(result_path, results_dir / result.filename)
                         
                     image_manifest["results"].append({
                         "filename": result.filename,
@@ -75,8 +78,8 @@ class ArchiveService:
                 manifest["images"].append(image_manifest)
 
             # Write manifest
-            with open(temp_dir / "manifest.json", "w") as f:
-                json.dump(manifest, f, indent=4)
+            async with aiofiles.open(temp_dir / "manifest.json", "w") as f:
+                await f.write(json.dumps(manifest, indent=4))
 
             # Create zip archive
             zip_path = Path(tempfile.gettempdir()) / f"dataset_{dataset_id}_{dataset.name}.zip"
@@ -85,6 +88,9 @@ class ArchiveService:
                     zipf.write(file_path, file_path.relative_to(temp_dir))
             
             return zip_path
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir_str)
 
     async def import_dataset_from_zip(self, zip_path: Path) -> Dataset:
         """
@@ -100,11 +106,12 @@ class ArchiveService:
             if not manifest_path.exists():
                 raise ValueError("manifest.json not found in the archive")
 
-            with open(manifest_path, "r") as f:
-                manifest = json.load(f)
+            async with aiofiles.open(manifest_path, "r") as f:
+                manifest_str = await f.read()
+            manifest = json.loads(manifest_str)
 
             # Create dataset
-            dataset_schema = DatasetCreate(**manifest["dataset"])
+            dataset_schema = CreateDatasetForm(**manifest["dataset"])
             new_dataset = await self.dataset_service.create_dataset(dataset_schema)
             
             images_dir = temp_dir / "images"
@@ -119,7 +126,7 @@ class ArchiveService:
                 upload_dir = FileService.create_upload_directory(new_dataset.id)
                 new_image_path = upload_dir / unique_filename
                 
-                shutil.copy(original_image_path, new_image_path)
+                await self._copy_file(original_image_path, new_image_path)
 
                 new_image = await self.image_service.create_image(
                     filename=unique_filename,
@@ -133,7 +140,7 @@ class ArchiveService:
                     result_upload_dir = FileService.create_result_directory(new_dataset.id)
                     new_result_path = result_upload_dir / result_manifest["filename"]
                     
-                    shutil.copy(original_result_path, new_result_path)
+                    await self._copy_file(original_result_path, new_result_path)
 
                     await self.result_service.create_result(
                         image_id=new_image.id,
@@ -143,3 +150,12 @@ class ArchiveService:
                     )
             
             return new_dataset
+
+    async def _copy_file(self, src: Path, dest: Path):
+        async with aiofiles.open(src, 'rb') as f_src:
+            async with aiofiles.open(dest, 'wb') as f_dest:
+                while True:
+                    chunk = await f_src.read(8192)
+                    if not chunk:
+                        break
+                    await f_dest.write(chunk)

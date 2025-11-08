@@ -55,6 +55,17 @@ class ImageService(BaseService):
         except Exception as e:
             logger.error(f"Error getting images from dataset {dataset_id}: {str(e)}")
             raise HTTPException(status_code=500, detail="Database error")
+
+    async def get_images_by_dataset(self, dataset_id: int) -> List[Image]:
+        """Получение всех изображений из датасета"""
+        try:
+            images_query = select(Image).where(Image.dataset_id == dataset_id)
+            images_result = await self.db.execute(images_query)
+            images = images_result.scalars().all()
+            return images
+        except Exception as e:
+            logger.error(f"Error getting all images from dataset {dataset_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail="Database error")
     
     async def create_image(self, filename: str, original_filename: str, dataset_id: int) -> Image:
         """Создание записи изображения в БД"""
