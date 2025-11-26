@@ -10,3 +10,8 @@ uploads
 
 # Virtual environments
 .venv
+
+saved_models/
+saved_models_enhanced/
+req.txt
+_test_k/
