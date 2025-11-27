@@ -1,161 +1,296 @@
-import zipfile
+import shutil
 import json
+import zipfile
+import asyncio
 from pathlib import Path
-import tempfile
-import aiofiles
-import aiofiles.os
-from typing import Dict, Any
+from typing import List, Dict, Any
+from datetime import datetime
+import uuid
+import logging
+from collections import defaultdict
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.service.IO.dataset_service import DatasetService
+from sqlalchemy import select
+from fastapi import UploadFile, HTTPException
+import aiofiles
+from app.models.dataset import Dataset
+from app.models.image import Image
+from app.models.result import Results
+from app.service.IO.base_service import BaseService
 from app.service.IO.image_service import ImageService
 from app.service.IO.result_service import ResultService
-from app.models.dataset import Dataset
-from app.schemas.dataset import CreateDatasetForm
-from app.service.IO.file_services import FileService
+from app.schemas.archive import DatasetExportManifest, ImageExportItem, ResultExportItem
+from app.core.executor import get_executor
+from app.core.task_manager import task_manager, TaskStatus
 
+logger = logging.getLogger(__name__)
 
-class ArchiveService:
-    def __init__(self, db_session: AsyncSession):
-        self.db_session = db_session
-        self.dataset_service = DatasetService(db_session)
-        self.image_service = ImageService(db_session)
-        self.result_service = ResultService(db_session)
+class ArchiveService(BaseService):
+    def __init__(self, db: AsyncSession):
+        super().__init__(db)
+        self.image_service = ImageService(db)
+        self.result_service = ResultService(db)
 
-    async def export_dataset_to_zip(self, dataset_id: int) -> Path:
+    def _create_zip_sync(
+        self, 
+        temp_dir: Path, 
+        dataset: Dataset, 
+        images: List[Image], 
+        results_map: Dict[int, List[Results]]
+    ) -> str:
         """
-        Exports a dataset to a zip archive.
-        The archive will contain images, results, and a manifest.json file.
+        Синхронная функция создания архива. 
+        Запускается в ThreadPoolExecutor.
         """
-        dataset = await self.dataset_service.get_dataset_by_id(dataset_id)
-        if not dataset:
-            raise ValueError("Dataset not found")
-
-        images = await self.image_service.get_images_by_dataset(dataset_id)
-        
-        temp_dir_str = tempfile.mkdtemp()
         try:
-            temp_dir = Path(temp_dir_str)
             images_dir = temp_dir / "images"
             results_dir = temp_dir / "results"
-            await aiofiles.os.mkdir(images_dir)
-            await aiofiles.os.mkdir(results_dir)
+            images_dir.mkdir(parents=True, exist_ok=True)
+            results_dir.mkdir(parents=True, exist_ok=True)
 
-            manifest: Dict[str, Any] = {
-                "dataset": {
-                    "title": dataset.title,
-                    "description": dataset.description,
-                },
-                "images": [],
-            }
+            manifest_images = []
 
-            for image in images:
-                # Copy image file
-                image_path = FileService.get_image_path(dataset.id, image.filename)
-                if image_path.exists():
-                    await aiofiles.os.stat(image_path) # check if file is accessible
-                    await self._copy_file(image_path, images_dir / image.filename)
-
-                image_manifest = {
-                    "filename": image.filename,
-                    "original_filename": image.original_filename,
-                    "results": []
-                }
-
-                results = await self.result_service.get_results_by_image(image.id)
-                for result in results:
-                    result_path = FileService.get_result_path(dataset.id, result.filename)
-                    if result_path.exists():
-                        await self._copy_file(result_path, results_dir / result.filename)
-                        
-                    image_manifest["results"].append({
-                        "filename": result.filename,
-                        "description": result.description,
-                        "parameters": result.parameters,
-                    })
+            for img in images:
+                # 1. Копируем изображение
+                src_img_path = self.image_service.get_image_file_path(img)
+                if src_img_path.exists():
+                    shutil.copy2(src_img_path, images_dir / img.filename)
                 
-                manifest["images"].append(image_manifest)
+                # 2. Обрабатываем результаты
+                img_results = results_map.get(img.id, [])
+                export_results = []
+                
+                for res in img_results:
+                    # Копируем JSON, чтобы не менять объект SQLAlchemy
+                    res_json = json.loads(json.dumps(res.result)) if res.result else {}
+                    resources = res_json.get("resources", [])
+                    new_resources = []
+                    
+                    for r in resources:
+                        if r.get("type") == "image" and "path" in r:
+                            orig_path = Path(r["path"])
+                            if orig_path.exists():
+                                # Уникальное имя файла для архива
+                                archive_res_name = f"{img.id}_{uuid.uuid4().hex[:8]}_{orig_path.name}"
+                                shutil.copy2(orig_path, results_dir / archive_res_name)
+                                
+                                # Обновляем путь на относительный
+                                r_copy = r.copy()
+                                r_copy["path"] = f"results/{archive_res_name}"
+                                new_resources.append(r_copy)
+                        else:
+                            new_resources.append(r)
+                    
+                    res_json["resources"] = new_resources
+                    
+                    export_results.append(ResultExportItem(
+                        name_method=res.name_method,
+                        result_data=res_json,
+                        created_at=res.created_at.isoformat() if res.created_at else ""
+                    ))
 
-            # Write manifest
-            async with aiofiles.open(temp_dir / "manifest.json", "w") as f:
-                await f.write(json.dumps(manifest, indent=4))
+                manifest_images.append(ImageExportItem(
+                    original_filename=img.original_filename,
+                    filename=img.filename,
+                    results=export_results
+                ))
 
-            # Create zip archive
-            zip_path = Path(tempfile.gettempdir()) / f"dataset_{dataset_id}_{dataset.name}.zip"
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for file_path in temp_dir.rglob('*'):
-                    zipf.write(file_path, file_path.relative_to(temp_dir))
+            # 3. Создаем манифест
+            manifest = DatasetExportManifest(
+                title=dataset.title,
+                description=dataset.description,
+                created_at=dataset.created_at.isoformat() if dataset.created_at else datetime.now().isoformat(),
+                images=manifest_images
+            )
+
+            with open(temp_dir / "manifest.json", "w", encoding='utf-8') as f:
+                f.write(manifest.model_dump_json(indent=2))
+
+            # 4. Упаковываем в ZIP
+            export_dir = Path("exports")
+            export_dir.mkdir(exist_ok=True)
             
-            return zip_path
-        finally:
-            import shutil
-            shutil.rmtree(temp_dir_str)
+            # Имя итогового файла
+            safe_title = "".join([c for c in dataset.title if c.isalnum() or c in (' ', '-', '_')]).strip()
+            zip_filename = f"dataset_{dataset.id}_{safe_title}"
+            zip_path = export_dir / zip_filename 
+            
+            # make_archive добавляет .zip автоматически
+            shutil.make_archive(str(zip_path), 'zip', temp_dir)
+            
+            return str(zip_path.with_suffix('.zip'))
 
-    async def import_dataset_from_zip(self, zip_path: Path) -> Dataset:
+        except Exception as e:
+            logger.error(f"Sync zip creation failed: {e}")
+            raise e
+
+    async def run_export_task(self, task_id: str, dataset_id: int):
         """
-        Imports a dataset from a zip archive.
+        Фоновая задача для сбора данных и запуска архивации.
         """
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir = Path(temp_dir_str)
+        try:
+            task_manager.update_task(task_id, TaskStatus.PROCESSING, "Collecting data from DB...")
             
-            with zipfile.ZipFile(zip_path, 'r') as zipf:
-                zipf.extractall(temp_dir)
-
-            manifest_path = temp_dir / "manifest.json"
-            if not manifest_path.exists():
-                raise ValueError("manifest.json not found in the archive")
-
-            async with aiofiles.open(manifest_path, "r") as f:
-                manifest_str = await f.read()
-            manifest = json.loads(manifest_str)
-
-            # Create dataset
-            dataset_schema = CreateDatasetForm(**manifest["dataset"])
-            new_dataset = await self.dataset_service.create_dataset(dataset_schema)
+            # 1. Сбор данных (IO/DB bound)
+            dataset = await self.db.get(Dataset, dataset_id)
+            if not dataset:
+                raise Exception("Dataset not found")
             
-            images_dir = temp_dir / "images"
-            results_dir = temp_dir / "results"
+            images = await self.image_service.get_images_by_dataset(dataset_id)
+            
+            # ОПТИМИЗАЦИЯ: Загружаем все результаты одним запросом
+            image_ids = [img.id for img in images]
+            results_map = defaultdict(list)
+            
+            if image_ids:
+                stmt = select(Results).where(Results.image_id.in_(image_ids))
+                all_results = (await self.db.execute(stmt)).scalars().all()
+                for res in all_results:
+                    results_map[res.image_id].append(res)
 
-            for image_manifest in manifest["images"]:
-                # Create image
-                original_image_path = images_dir / image_manifest["filename"]
-                
-                unique_filename = FileService.generate_unique_filename(image_manifest["original_filename"])
-                
-                upload_dir = FileService.create_upload_directory(new_dataset.id)
-                new_image_path = upload_dir / unique_filename
-                
-                await self._copy_file(original_image_path, new_image_path)
+            task_manager.update_task(task_id, TaskStatus.PROCESSING, f"Compressing {len(images)} images...")
 
-                new_image = await self.image_service.create_image(
-                    filename=unique_filename,
-                    original_filename=image_manifest["original_filename"],
-                    dataset_id=new_dataset.id
+            # 2. Создание архива (CPU/Disk IO bound -> в executor)
+            temp_dir = Path(f"temp_export_{task_id}")
+            
+            try:
+                loop = asyncio.get_running_loop()
+                zip_path = await loop.run_in_executor(
+                    get_executor(),
+                    self._create_zip_sync,
+                    temp_dir,
+                    dataset,
+                    images,
+                    results_map
                 )
 
-                for result_manifest in image_manifest.get("results", []):
-                    original_result_path = results_dir / result_manifest["filename"]
-                    
-                    result_upload_dir = FileService.create_result_directory(new_dataset.id)
-                    new_result_path = result_upload_dir / result_manifest["filename"]
-                    
-                    await self._copy_file(original_result_path, new_result_path)
+                task_manager.update_task(
+                    task_id, 
+                    TaskStatus.COMPLETED, 
+                    message="Export ready", 
+                    result={"file_path": zip_path, "filename": Path(zip_path).name}
+                )
+            finally:
+                # Очистка временной папки
+                if temp_dir.exists():
+                    await loop.run_in_executor(get_executor(), shutil.rmtree, temp_dir)
 
-                    await self.result_service.create_result(
+        except Exception as e:
+            logger.error(f"Export task failed: {e}")
+            task_manager.update_task(task_id, TaskStatus.FAILED, error=str(e))
+
+    async def import_dataset(self, file: UploadFile) -> Dataset:
+        """
+        Импорт датасета из ZIP.
+        """
+        temp_dir = Path(f"temp_import_{uuid.uuid4()}")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = temp_dir / "upload.zip"
+
+        try:
+            async with aiofiles.open(zip_path, "wb") as f:
+                while content := await file.read(1024 * 1024): 
+                    await f.write(content)
+
+            # 2. Распаковка (CPU/Disk IO bound -> executor)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                get_executor(), 
+                shutil.unpack_archive, 
+                str(zip_path), 
+                str(temp_dir), 
+                'zip'
+            )
+
+            # 3. Чтение манифеста
+            manifest_path = temp_dir / "manifest.json"
+            if not manifest_path.exists():
+                raise HTTPException(status_code=400, detail="Invalid archive: manifest.json missing")
+
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                manifest = DatasetExportManifest(**data)
+
+            # 4. Создание структуры в БД
+            new_dataset = Dataset(
+                title=f"{manifest.title} (Imported {datetime.now().strftime('%d.%m %H:%M')})",
+                description=manifest.description
+            )
+            self.db.add(new_dataset)
+            await self.db.commit()
+            await self.db.refresh(new_dataset)
+
+            # Папки для файлов
+            new_images_dir = Path(f"uploads/images/{new_dataset.id}")
+            new_results_dir = Path(f"uploads/results/{new_dataset.id}")
+            new_images_dir.mkdir(parents=True, exist_ok=True)
+            new_results_dir.mkdir(parents=True, exist_ok=True)
+
+            # 5. Импорт данных
+            for img_item in manifest.images:
+                # Новое имя файла
+                ext = Path(img_item.filename).suffix
+                new_filename = f"{uuid.uuid4()}{ext}"
+                
+                # Копирование (File IO)
+                src_img = temp_dir / "images" / img_item.filename
+                if src_img.exists():
+                    shutil.copy2(src_img, new_images_dir / new_filename)
+                
+                # Запись в БД
+                new_image = Image(
+                    filename=new_filename,
+                    original_filename=img_item.original_filename,
+                    dataset_id=new_dataset.id
+                )
+                self.db.add(new_image)
+                await self.db.commit()
+                await self.db.refresh(new_image)
+
+                # Результаты
+                for res_item in img_item.results:
+                    res_data = res_item.result_data
+                    resources = res_data.get("resources", [])
+                    new_resources = []
+                    
+                    for r in resources:
+                        if r.get("type") == "image" and "path" in r:
+                            # Относительный путь из манифеста -> Абсолютный временный путь
+                            rel_path = r["path"] # "results/filename.jpg"
+                            src_res_file = temp_dir / rel_path
+                            
+                            if src_res_file.exists():
+                                new_res_filename = f"{new_image.id}_{src_res_file.name}"
+                                dest_path = new_results_dir / new_res_filename
+                                shutil.copy2(src_res_file, dest_path)
+                                
+                                # Обновляем путь на новый абсолютный
+                                r_copy = r.copy()
+                                r_copy["path"] = str(dest_path)
+                                new_resources.append(r_copy)
+                        else:
+                            new_resources.append(r)
+                    
+                    res_data["resources"] = new_resources
+                    
+                    new_result = Results(
                         image_id=new_image.id,
-                        filename=result_manifest["filename"],
-                        description=result_manifest.get("description"),
-                        parameters=result_manifest.get("parameters")
+                        name_method=res_item.name_method,
+                        result=res_data
                     )
+                    self.db.add(new_result)
             
+            await self.db.commit()
             return new_dataset
 
-    async def _copy_file(self, src: Path, dest: Path):
-        async with aiofiles.open(src, 'rb') as f_src:
-            async with aiofiles.open(dest, 'wb') as f_dest:
-                while True:
-                    chunk = await f_src.read(8192)
-                    if not chunk:
-                        break
-                    await f_dest.write(chunk)
+        except Exception as e:
+            await self.rollback_db()
+            logger.error(f"Import failed: {e}")
+            # ИСПРАВЛЕНО: сообщение об ошибке теперь начинается с "Import failed"
+            raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+        finally:
+            if temp_dir.exists():
+                try:
+                    await loop.run_in_executor(get_executor(), shutil.rmtree, temp_dir)
+                except Exception:
+                    pass

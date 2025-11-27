@@ -1,22 +1,34 @@
-import logging
-from fastapi import FastAPI, BackgroundTasks, APIRouter, Depends, HTTPException
-from concurrent.futures import ThreadPoolExecutor
-import asyncio, time, uuid
-from typing import Dict, Optional
-from pydantic import BaseModel, Field, field_validator
-from enum import Enum
-from app.db.session import get_db
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from app.service.IO.image_service import ImageService
-from app.service.IO.result_service import ResultService
-from app.service.image_processor import ImageProcessor
-from app.models.result import Results
+from pydantic import BaseModel, field_validator
+from enum import Enum
+from typing import List, Optional
+import logging
+import asyncio
 import cv2
 import numpy as np
-from pathlib import Path
-from fastapi.responses import FileResponse
 import os
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+from app.db.session import get_db
+# Импортируем фабрику сессий для фоновых задач (т.к. сессия из Depends закроется после ответа)
+from app.db.session import AsyncSessionLocal 
+
+from app.service.IO.image_service import ImageService
+from app.service.IO.result_service import ResultService
+from app.service.computation.cluster_service import ClusterService
+from app.core.exceptions import ResourceNotFoundError, CalculationError
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+from app.core.executor import get_executor # <--- Импорт
+
+# Создаем пул потоков для тяжелых операций OpenCV, чтобы не блокировать Event Loop
+executor = get_executor()
+
+# --- Pydantic Models ---
 
 class CriteriaEnum(Enum):
     EPSILON = 'epsilon'
@@ -34,198 +46,96 @@ class KMeansRequest(BaseModel):
     attempts: int = 5
     epsilon: float = 0.5
     flags: FlagsEnum = FlagsEnum.PP_CENTERS
-    colors: list[tuple[int, int, int]]
+    colors: List[tuple[int, int, int]]
     
     @field_validator('colors')
     def validate_colors_count(cls, v, values):
+        # Проверяем, что количество цветов совпадает с количеством кластеров
         if 'nclusters' in values.data and len(v) != values.data['nclusters']:
             raise ValueError(f"Number of colors ({len(v)}) must match nclusters ({values.data['nclusters']})")
         return v
 
-logger = logging.getLogger(__name__)
-router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=4)
-
-def apply_kmeans_sync(
-    bgr_image: np.ndarray, 
-    nclusters: int,
-    criteria: CriteriaEnum,
-    max_iterations: int,
-    attempts: int,
-    epsilon: float,  # Добавляем epsilon параметр
-    flags: FlagsEnum,
-    colors: list[tuple[int, int, int]]
-) -> dict:
-    """Синхронное применение K-means кластеризации"""
-    try:
-        # Получаем L-канал для кластеризации
-        processor = ImageProcessor(bgr_image)
-        L_channel = processor.getLChanel()
-        
-        # Подготавливаем данные для K-means (используем только L-канал)
-        data = L_channel.reshape((-1, 1)).astype(np.float32)
-        
-        # Настройка критериев остановки с использованием epsilon
-        if criteria == CriteriaEnum.EPSILON:
-            cv_criteria = (cv2.TERM_CRITERIA_EPS, max_iterations, epsilon)
-        elif criteria == CriteriaEnum.MAX_ITRATIONS:
-            cv_criteria = (cv2.TERM_CRITERIA_MAX_ITER, max_iterations, epsilon)
-        else:  # ALL
-            cv_criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, max_iterations, epsilon)
-        
-        # Настройка флагов инициализации
-        if flags == FlagsEnum.PP_CENTERS:
-            cv_flags = cv2.KMEANS_PP_CENTERS
-        else:  # RANDOM
-            cv_flags = cv2.KMEANS_RANDOM_CENTERS
-        
-        # Применяем K-means
-        compactness, labels, centers = cv2.kmeans(
-            data, nclusters, None, cv_criteria, attempts, cv_flags
-        )
-        
-        # Сортируем центроиды по возрастанию и получаем индексы сортировки
-        centers_flat = centers.flatten()
-        sorted_indices = np.argsort(centers_flat)
-        sorted_centers = centers_flat[sorted_indices]
-        
-        # Создаем маппинг старых индексов на новые (отсортированные)
-        label_mapping = np.zeros(nclusters, dtype=np.int32)
-        for new_idx, old_idx in enumerate(sorted_indices):
-            label_mapping[old_idx] = new_idx
-        
-        # Переназначаем метки согласно новой сортировке
-        remapped_labels = label_mapping[labels.flatten()]
-        
-        # Создаем цветное изображение используя заданные цвета
-        height, width = L_channel.shape
-        colored_image = np.zeros((height, width, 3), dtype=np.uint8)
-        
-        for i in range(nclusters):
-            mask = remapped_labels == i
-            color_bgr = (colors[i][2], colors[i][1], colors[i][0])  # RGB -> BGR
-            colored_image[mask.reshape(height, width)] = color_bgr
-        
-        # Подготавливаем результат - добавляем epsilon
-        result_data = {
-            "nclusters": nclusters,
-            "criteria": criteria.value,
-            "max_iterations": max_iterations,
-            "attempts": attempts,
-            "epsilon": epsilon,  # Добавляем epsilon в результат
-            "flags": flags.value,
-            "colors_rgb": colors,
-            "centers_sorted": sorted_centers.tolist(),
-            "compactness": float(compactness),
-            "original_shape": bgr_image.shape,
-            "processed_pixels": len(data)
-        }
-        
-        return {
-            "result_data": result_data,
-            "colored_image": colored_image
-        }
-        
-    except Exception as e:
-        logger.error(f"K-means processing error: {str(e)}")
-        raise
-
-async def save_kmeans_result(
-    db: AsyncSession,
-    image_id: int,
-    result_data: dict,
-    colored_image: np.ndarray
-) -> Results:
-    """Сохранение результатов K-means в БД"""
-    try:
-        # Сохраняем обработанное изображение
-        image_service = ImageService(db)
-        original_image = await image_service.get_image_by_id(image_id)
-        
-        # Создаем путь для результата
-        result_filename = f"{image_id}_kmeans_{result_data['nclusters']}.jpg"
-        result_dir = Path(f"uploads/results/{original_image.dataset_id}")
-        result_dir.mkdir(parents=True, exist_ok=True)
-        result_path = result_dir / result_filename
-        
-        # Сохраняем изображение
-        cv2.imwrite(str(result_path), colored_image)
-        
-        # Добавляем путь к результату
-        result_data["result_image_path"] = str(result_path)
-        result_data["result_filename"] = result_filename
-        
-        # Проверяем, есть ли уже результат K-means для этого изображения
-        existing_query = select(Results).where(
-            Results.name_method == "kmeans",
-            Results.image_id == image_id
-        )
-        existing_result = await db.execute(existing_query)
-        existing_record = existing_result.scalar_one_or_none()
-        
-        if existing_record:
-            # Обновляем существующую запись
-            update_stmt = update(Results).where(
-                Results.id == existing_record.id
-            ).values(result=result_data)
-            await db.execute(update_stmt)
-            await db.commit()
-            
-            # Получаем обновленную запись
-            updated_query = select(Results).where(Results.id == existing_record.id)
-            updated_result = await db.execute(updated_query)
-            return updated_result.scalar_one()
-        else:
-            # Создаем новую запись
-            result_service = ResultService(db)
-            return await result_service.save_analysis_result(
-                method_name="kmeans",
-                result_data=result_data,
-                image_id=image_id
-            )
-            
-    except Exception as e:
-        logger.error(f"Error saving K-means result: {str(e)}")
-        raise
+# --- Background Task ---
 
 async def run_kmeans_task(
-    image_id: int,
-    kmeans_params: KMeansRequest,
-    bgr_image: np.ndarray
+    result_id: int,       # ID записи в БД, которую нужно обновить
+    image_id: int, 
+    params: KMeansRequest, 
+    bgr_image: np.ndarray, 
+    dataset_id: int
 ):
-    """Выполнение K-means в фоне"""
-    from app.db.session import AsyncSessionLocal
-    
+    """
+    Фоновая задача:
+    1. Выполняет K-Means (CPU-bound).
+    2. Сохраняет результат на диск (IO).
+    3. Обновляет запись в БД (processing -> completed/failed).
+    """
+    # Создаем новую сессию БД, так как это фоновая задача
     async with AsyncSessionLocal() as db:
+        result_service = ResultService(db)
         try:
-            # Выполняем K-means - добавляем epsilon
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
+            
+            # 1. Вычисления (в отдельном потоке, чтобы не блокировать сервер)
+            calc_res = await loop.run_in_executor(
                 executor,
-                apply_kmeans_sync,
+                ClusterService.apply_kmeans,
                 bgr_image,
-                kmeans_params.nclusters,
-                kmeans_params.criteria,
-                kmeans_params.max_iterations,
-                kmeans_params.attempts,
-                kmeans_params.epsilon,  # Передаем epsilon
-                kmeans_params.flags,
-                kmeans_params.colors
+                params.nclusters,
+                params.criteria.value,
+                params.max_iterations,
+                params.attempts,
+                params.epsilon,
+                params.flags.value,
+                params.colors
             )
             
-            # Сохраняем результат
-            await save_kmeans_result(
-                db,
-                image_id,
-                result["result_data"],
-                result["colored_image"]
+            # 2. Сохранение файла на диск
+            filename = f"{image_id}_kmeans_{params.nclusters}.jpg"
+            save_dir = Path(f"uploads/results/{dataset_id}")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            file_path = save_dir / filename
+            
+            # cv2.imwrite блокирующий, запускаем в потоке
+            await loop.run_in_executor(
+                executor,
+                cv2.imwrite,
+                str(file_path),
+                calc_res["colored_image"]
             )
             
-            logger.info(f"K-means completed for image {image_id}")
+            # 3. Обновление записи в БД
+            stats = calc_res["result_data"]
+            
+            # Данные для сохранения (статус меняется на completed)
+            data_to_save = {
+                "status": "completed", 
+                "centers_sorted": stats["centers_sorted"],
+                "compactness": stats["compactness"],
+                "processed_pixels": stats["processed_pixels"]
+            }
+            
+            # Ресурсы (ссылка на файл)
+            resources_to_save = [{
+                "type": "image",
+                "key": "clustered_image",
+                "path": str(file_path)
+            }]
+            
+            await result_service.update_result_data(
+                result_id=result_id,
+                data=data_to_save,
+                resources=resources_to_save
+            )
+            
+            logger.info(f"K-means task finished successfully for result_id {result_id}")
             
         except Exception as e:
-            logger.error(f"K-means task failed for image {image_id}: {str(e)}")
-            raise
+            logger.error(f"K-means task failed for result_id {result_id}: {e}")
+            # Важно: записываем ошибку в БД, чтобы фронтенд узнал о провале
+            await result_service.mark_as_failed(result_id, str(e))
+
+# --- Endpoints ---
 
 @router.post("/kmeans/{image_id}")
 async def apply_kmeans(
@@ -234,145 +144,153 @@ async def apply_kmeans(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
-    """Применение K-means кластеризации к изображению"""
+    """
+    Запуск K-means кластеризации.
+    Возвращает 200 OK со статусом "processing" сразу после валидации.
+    """
     try:
-        # Создаем сервис для работы с изображениями
+        # 1. Валидация и загрузка изображения
         image_service = ImageService(db)
-        
-        # Получаем запись изображения из БД
         image = await image_service.get_image_by_id(image_id)
         if not image:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Image with id {image_id} not found"
-            )
-        
-        # Получаем путь к файлу изображения
+            raise ResourceNotFoundError(f"Image {image_id} not found")
+            
         file_path = image_service.get_image_file_path(image)
-        
-        # Проверяем существование файла
-        if not image_service.validate_file_exists(file_path):
-            raise HTTPException(
-                status_code=404, 
-                detail="Image file not found on server"
-            )
-        
-        # Загружаем изображение через OpenCV
+        # Загружаем изображение сразу, чтобы вернуть 404/400, если файл битый, до запуска задачи
         bgr_image = image_service.load_image_cv2(file_path)
         
-        # Валидация параметров
-        if len(kmeans_params.colors) != kmeans_params.nclusters:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Number of colors ({len(kmeans_params.colors)}) must match nclusters ({kmeans_params.nclusters})"
-            )
+        # 2. Создаем запись в БД со статусом "processing"
+        result_service = ResultService(db)
         
-        # Запускаем K-means в фоне
+        # Сохраняем параметры запуска, чтобы они были видны на фронтенде
+        params_dict = {
+            "nclusters": kmeans_params.nclusters,
+            "criteria": kmeans_params.criteria.value,
+            "max_iterations": kmeans_params.max_iterations,
+            "epsilon": kmeans_params.epsilon,
+            "flags": kmeans_params.flags.value,
+            "colors": kmeans_params.colors
+        }
+        
+        # create_pending_result удалит старые результаты этого метода для этой картинки
+        pending_record = await result_service.create_pending_result(
+            image_id=image_id,
+            method_name="kmeans",
+            params=params_dict,
+            clear_previous=True 
+        )
+        
+        # 3. Добавляем задачу в фон
         background_tasks.add_task(
             run_kmeans_task,
-            image_id,
-            kmeans_params,
-            bgr_image
+            result_id=pending_record.id,
+            image_id=image_id,
+            params=kmeans_params,
+            bgr_image=bgr_image,
+            dataset_id=image.dataset_id
         )
         
         return {
             "success": True,
-            "message": f"K-means clustering started for image {image_id}",
+            "message": "K-means task queued",
             "image_id": image_id,
-            "parameters": {
-                "nclusters": kmeans_params.nclusters,
-                "criteria": kmeans_params.criteria.value,
-                "max_iterations": kmeans_params.max_iterations,
-                "attempts": kmeans_params.attempts,
-                "epsilon": kmeans_params.epsilon,  # Добавляем epsilon в ответ
-                "flags": kmeans_params.flags.value,
-                "colors": kmeans_params.colors
-            }
+            "result_id": pending_record.id,
+            "status": "processing"
         }
         
-    except HTTPException:
-        raise
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error processing image {image_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error processing image")
+        logger.error(f"Error starting kmeans task: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 
 @router.get("/kmeans/{image_id}/result")
 async def get_kmeans_result(image_id: int, db: AsyncSession = Depends(get_db)):
-    """Получение результата K-means для изображения"""
+    """
+    Получение результата.
+    Возвращает JSON с полем 'status', которое может быть: 'processing', 'completed', 'failed'.
+    """
     try:
-        # Ищем результат K-means для этого изображения
-        result_query = select(Results).where(
-            Results.name_method == "kmeans",
-            Results.image_id == image_id
-        ).order_by(Results.created_at.desc())
+        result_service = ResultService(db)
         
-        result = await db.execute(result_query)
-        kmeans_result = result.scalar_one_or_none()
+        # Получаем запись (метаданные)
+        record = await result_service.get_latest_result(image_id, "kmeans")
         
-        if not kmeans_result:
-            raise HTTPException(
-                status_code=404,
-                detail=f"K-means result not found for image {image_id}"
-            )
+        if not record:
+            raise HTTPException(status_code=404, detail="K-means calculation never started for this image")
+            
+        # Распаковываем данные (params + data)
+        data = await result_service.get_latest_result_data(image_id, "kmeans")
         
-        # Проверяем существование файла результата
-        result_data = kmeans_result.result
-        result_image_path = result_data.get("result_image_path")
-        image_exists = False
+        # Определяем статус (для обратной совместимости со старыми записями по умолчанию completed)
+        status = data.get("status", "completed")
         
-        if result_image_path and os.path.exists(result_image_path):
-            image_exists = True
+        # Проверяем наличие файла картинки (только если статус completed)
+        has_image = False
+        image_path = None
         
+        if status == "completed":
+            resources = record.result.get("resources", [])
+            for r in resources:
+                if r.get("key") == "clustered_image":
+                    image_path = r.get("path")
+                    break
+            has_image = bool(image_path and os.path.exists(image_path))
+
         return {
-            "result_id": kmeans_result.id,
-            "image_id": kmeans_result.image_id,
-            "method": kmeans_result.name_method,
-            "created_at": kmeans_result.created_at,
-            "result": kmeans_result.result,
-            "has_result_image": image_exists,
-            "result_image_path": result_image_path if image_exists else None
+            "result_id": record.id,
+            "image_id": record.image_id,
+            "method": record.name_method,
+            "status": status,
+            "created_at": record.created_at,
+            "result": data,           # Содержит params, centers, compactness и т.д.
+            "has_result_image": has_image,
+            "error": data.get("error") # Будет заполнено, если status == failed
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting K-means result for image {image_id}: {str(e)}")
+        logger.error(f"Error getting kmeans result: {e}")
         raise HTTPException(status_code=500, detail="Error getting result")
+
 
 @router.get("/kmeans/{image_id}/result/image")
 async def get_kmeans_result_image(image_id: int, db: AsyncSession = Depends(get_db)):
-    """Получение обработанного изображения K-means"""
+    """
+    Скачивание обработанного изображения.
+    """
     try:
-        # Ищем результат K-means для этого изображения
-        result_query = select(Results).where(
-            Results.name_method == "kmeans",
-            Results.image_id == image_id
-        ).order_by(Results.created_at.desc())
+        result_service = ResultService(db)
+        record = await result_service.get_latest_result(image_id, "kmeans")
         
-        result = await db.execute(result_query)
-        kmeans_result = result.scalar_one_or_none()
+        if not record:
+             raise HTTPException(status_code=404, detail="Result not found")
         
-        if not kmeans_result:
-            raise HTTPException(
-                status_code=404,
-                detail=f"K-means result not found for image {image_id}"
-            )
+        # Проверяем статус в самом JSON
+        data = await result_service.get_latest_result_data(image_id, "kmeans")
+        if data.get("status") == "processing":
+            raise HTTPException(status_code=400, detail="Image is still processing")
+        if data.get("status") == "failed":
+             raise HTTPException(status_code=400, detail="Processing failed, no image available")
+
+        # Ищем путь к файлу
+        resources = record.result.get("resources", [])
+        image_path = None
+        for r in resources:
+            if r.get("key") == "clustered_image":
+                image_path = r.get("path")
+                break
         
-        # Получаем путь к обработанному изображению
-        result_data = kmeans_result.result
-        result_image_path = result_data.get("result_image_path")
+        if not image_path or not os.path.exists(image_path):
+            raise HTTPException(status_code=404, detail="Result file missing on server")
         
-        if not result_image_path or not os.path.exists(result_image_path):
-            raise HTTPException(
-                status_code=404,
-                detail="Result image file not found"
-            )
-        
-        # Возвращаем файл изображения
-        filename = result_data.get("result_filename", f"kmeans_result_{image_id}.jpg")
-        
+        # Получаем имя файла для заголовка Content-Disposition
+        filename = Path(image_path).name
+            
         return FileResponse(
-            path=result_image_path,
+            path=image_path, 
             media_type="image/jpeg",
             filename=filename
         )
@@ -380,5 +298,5 @@ async def get_kmeans_result_image(image_id: int, db: AsyncSession = Depends(get_
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting K-means result image for image {image_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error getting result image")
+        logger.error(f"Error serving result image: {e}")
+        raise HTTPException(status_code=500, detail="Error serving file")

@@ -6,6 +6,9 @@ import logging
 
 from app.models.dataset import Dataset
 from app.service.IO.base_service import BaseService
+from app.service.IO.image_service import ImageService
+from app.service.IO.file_services import FileService
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,7 @@ class DatasetService(BaseService):
             raise HTTPException(status_code=500, detail="Database error")
     
     async def delete_dataset(self, dataset_id: int) -> Dataset:
-        """Удаление датасета из БД"""
+        """Удаление датасета из БД с каскадным удалением изображений и файлов"""
         try:
             dataset = await self.get_dataset_by_id(dataset_id)
             if not dataset:
@@ -79,13 +82,27 @@ class DatasetService(BaseService):
                     status_code=404,
                     detail=f"Dataset with id {dataset_id} not found"
                 )
-            
+
+            # Удаляем все записи изображений из БД через ImageService (возвращает количество)
+            image_service = ImageService(self.db)
+            images_count = await image_service.delete_images_by_dataset(dataset_id)
+            # Зафиксируем удаление изображений
+            await self.db.commit()
+
+            # Удаляем файлы изображений и результаты с диска
+            try:
+                FileService.remove_directory(Path(f"uploads/images/{dataset_id}"))
+                FileService.remove_directory(Path(f"uploads/results/{dataset_id}"))
+            except Exception as fe:
+                logger.warning(f"File system cleanup failed for dataset {dataset_id}: {fe}")
+
+            # Удаляем сам датасет
             await self.db.delete(dataset)
             await self.db.commit()
-            
-            logger.info(f"Deleted dataset: {dataset_id}")
+
+            logger.info(f"Deleted dataset: {dataset_id}, removed {images_count} images")
             return dataset
-            
+
         except HTTPException:
             await self.rollback_db()
             raise

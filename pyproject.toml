@@ -10,12 +10,19 @@ dependencies = [
     "alembic>=1.17.0",
     "fastapi>=0.120.0",
     "hipart>=1.0.6",
+    "httpx>=0.28.1",
     "matplotlib>=3.10.7",
     "opencv-python>=4.12.0.88",
     "pydantic-settings>=2.11.0",
+    "pytest>=9.0.1",
+    "pytest-asyncio>=1.3.0",
     "python-multipart>=0.0.20",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.7.2",
     "sqlalchemy>=2.0.44",
     "uvicorn>=0.38.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--ignore=_test_k"
+asyncio_mode = "auto"
