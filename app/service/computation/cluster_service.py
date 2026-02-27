@@ -2,6 +2,26 @@ import cv2
 import numpy as np
 from app.service.image_processor import ImageProcessor
 from app.core.exceptions import CalculationError
+from pydantic import BaseModel
+
+class KMeansParams(BaseModel):
+    nclusters: int
+    criteria_type: str  # 'epsilon', 'max iterations', 'both'
+    max_iterations: int
+    attempts: int
+    epsilon: float
+    flags_type: str  # 'pp' or 'random'
+    colors: list  # List of RGB tuples
+
+class ResultData(BaseModel):
+    centers_sorted: list
+    compactness: float
+    processed_pixels: int
+
+class KMeansResult(BaseModel):
+    result_data: ResultData
+    colored_image: np.ndarray
+    model_config = {"arbitrary_types_allowed": True}
 
 class ClusterService:
     @staticmethod
@@ -14,8 +34,17 @@ class ClusterService:
         epsilon: float,
         flags_type: str,
         colors: list
-    ) -> dict:
+    ) -> KMeansResult:
         try:
+            params: KMeansParams = KMeansParams(
+                nclusters=nclusters,
+                criteria_type=criteria_type,
+                max_iterations=max_iterations,
+                attempts=attempts,
+                epsilon=epsilon,
+                flags_type=flags_type,
+                colors=colors
+            )
             processor = ImageProcessor(bgr_image)
             L_channel = processor.getLChanel()
             data = L_channel.reshape((-1, 1)).astype(np.float32)
@@ -55,13 +84,13 @@ class ClusterService:
                 color_bgr = (colors[i][2], colors[i][1], colors[i][0])
                 colored_image[mask.reshape(height, width)] = color_bgr
                 
-            return {
-                "result_data": {
-                    "centers_sorted": sorted_centers.tolist(),
-                    "compactness": float(compactness),
-                    "processed_pixels": len(data)
-                },
-                "colored_image": colored_image
-            }
+            return KMeansResult(
+                result_data=ResultData(
+                    centers_sorted=sorted_centers.tolist(),
+                    compactness=float(compactness),
+                    processed_pixels=len(data)
+                ),
+                colored_image=colored_image
+            )
         except Exception as e:
             raise CalculationError(f"K-means error: {str(e)}")
