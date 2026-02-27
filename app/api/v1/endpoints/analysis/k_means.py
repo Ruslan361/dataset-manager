@@ -101,18 +101,18 @@ async def run_kmeans_task(
                 executor,
                 cv2.imwrite,
                 str(file_path),
-                calc_res["colored_image"]
+                calc_res.colored_image
             )
             
             # 3. Обновление записи в БД
-            stats = calc_res["result_data"]
+            stats = calc_res.result_data
             
             # Данные для сохранения (статус меняется на completed)
             data_to_save = {
                 "status": "completed", 
-                "centers_sorted": stats["centers_sorted"],
-                "compactness": stats["compactness"],
-                "processed_pixels": stats["processed_pixels"]
+                "centers_sorted": getattr(stats, "centers_sorted", []),
+                "compactness": float(getattr(stats, "compactness", 0.0)),
+                "processed_pixels": int(getattr(stats, "processed_pixels", 0))
             }
             
             # Ресурсы (ссылка на файл)
@@ -151,16 +151,41 @@ async def apply_kmeans(
     try:
         # 1. Валидация и загрузка изображения
         image_service = ImageService(db)
+        result_service = ResultService(db)
+
         image = await image_service.get_image_by_id(image_id)
         if not image:
             raise ResourceNotFoundError(f"Image {image_id} not found")
-            
+
         file_path = image_service.get_image_file_path(image)
         # Загружаем изображение сразу, чтобы вернуть 404/400, если файл битый, до запуска задачи
         bgr_image = image_service.load_image_cv2(file_path)
-        
+
+        # Если в БД есть последний результат "crop", применяем сохранённые координаты.
+        try:
+            crop_record = await result_service.get_latest_result(image_id, "crop")
+            if crop_record:
+                params = (crop_record.result or {}).get("params") or {}
+                top = params.get("top")
+                bottom = params.get("bottom")
+                left = params.get("left")
+                right = params.get("right")
+                # Проверяем, что все координаты целые числа
+                if all(isinstance(v, int) for v in (top, bottom, left, right)):
+                    h, w = bgr_image.shape[:2]
+                    # Ограничиваем координаты пределами изображения
+                    top = max(0, min(h, top))
+                    bottom = max(0, min(h, bottom))
+                    left = max(0, min(w, left))
+                    right = max(0, min(w, right))
+                    # Применяем кроп только если область непустая
+                    if bottom > top and right > left:
+                        bgr_image = bgr_image[top:bottom, left:right]
+        except Exception:
+            # В случае проблем с чтением/парсингом записи — продолжаем без кропа
+            pass
+
         # 2. Создаем запись в БД со статусом "processing"
-        result_service = ResultService(db)
         
         # Сохраняем параметры запуска, чтобы они были видны на фронтенде
         params_dict = {
