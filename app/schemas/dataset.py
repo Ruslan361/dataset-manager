@@ -7,6 +7,11 @@ class CreateDatasetForm(BaseModel):
     title: str
     description: Optional[str] = None
 
+
+class UpdateDatasetForm(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
 class GetDatasetsList(BaseModel):
     start: int = Field(gt=-1)
     end: int = Field(gt=0)
