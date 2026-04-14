@@ -5,10 +5,31 @@ from app.core.config import settings
 from app.db.init_db import init_db
 from contextlib import asynccontextmanager
 from app.core.executor import shutdown_executor
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+def cleanup_exports_dir():
+    """Удаляет все ZIP-файлы из exports/ при старте.
+    После перезапуска task_manager пустой — старые файлы всё равно недоступны."""
+    exports_dir = Path("exports")
+    if not exports_dir.exists():
+        return
+    deleted = 0
+    for f in exports_dir.iterdir():
+        try:
+            f.unlink()
+            deleted += 1
+        except Exception as e:
+            logger.warning(f"Could not delete leftover export {f}: {e}")
+    if deleted:
+        logger.info(f"Startup cleanup: removed {deleted} leftover export file(s)")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    cleanup_exports_dir()
     yield
     shutdown_executor()
     

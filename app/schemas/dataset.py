@@ -12,10 +12,6 @@ class UpdateDatasetForm(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
 
-class GetDatasetsList(BaseModel):
-    start: int = Field(gt=-1)
-    end: int = Field(gt=0)
-
 class DatasetResponse(BaseModel):
     id: int
     title: str

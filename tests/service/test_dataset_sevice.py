@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
@@ -7,7 +8,7 @@ from app.service.IO.dataset_service import DatasetService
 
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def db_session():
     engine = create_async_engine(DATABASE_URL, echo=False)
     async with engine.begin() as conn:
@@ -55,7 +56,7 @@ async def test_update_dataset(db_session):
 async def test_delete_dataset(db_session):
     service = DatasetService(db_session)
     dataset = await service.create_dataset("To Delete", "Desc")
-    deleted = await service.delete_dataset(dataset.id)
+    deleted, _ = await service.delete_dataset(dataset.id)
     assert deleted.id == dataset.id
     # Проверяем, что датасет удалён
     fetched = await service.get_dataset_by_id(dataset.id)

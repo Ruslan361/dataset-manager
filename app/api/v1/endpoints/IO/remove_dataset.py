@@ -1,12 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas.result import ResultResponse 
+from app.schemas.result import ResultResponse
 from app.service.IO.dataset_service import DatasetService
-from app.service.IO.image_service import ImageService
-from app.service.IO.file_services import FileService
 from app.db.session import get_db
 import logging
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,30 +15,13 @@ async def remove_dataset(
 ):
     """Удаление датасета со всеми изображениями и файлами"""
     dataset_service = DatasetService(db)
-    image_service = ImageService(db)
-    
+
     try:
-        # Проверка существования датасета
-        dataset = await dataset_service.get_dataset_by_id(dataset_id)
-        if not dataset:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Dataset with id {dataset_id} not found"
-            )
-        
-        # Удаление всех изображений из БД и подсчет количества
-        images_count = await image_service.delete_images_by_dataset(dataset_id)
-        
-        # Удаление датасета из БД
-        deleted_dataset = await dataset_service.delete_dataset(dataset_id)
-        
-        # Удаление папки с файлами
-        dataset_folder = Path(f"uploads/images/{dataset_id}")
-        folder_deleted = FileService.remove_directory(dataset_folder)
-        
+        # Удаление датасета вместе с изображениями, результатами и файлами
+        # (404 бросает сам delete_dataset если датасет не найден)
+        deleted_dataset, images_count = await dataset_service.delete_dataset(dataset_id)
+
         success_message = f"Dataset '{deleted_dataset.title}' (ID: {dataset_id}) and {images_count} images deleted successfully"
-        if not folder_deleted:
-            success_message += " (folder was not found or already deleted)"
         
         logger.info(success_message)
         

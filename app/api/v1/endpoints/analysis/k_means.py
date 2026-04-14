@@ -10,12 +10,10 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 
 from app.db.session import get_db
-# Импортируем фабрику сессий для фоновых задач (т.к. сессия из Depends закроется после ответа)
-from app.db.session import AsyncSessionLocal 
-
+from app.db.session import AsyncSessionLocal
+from app.core.executor import get_executor
 from app.service.IO.image_service import ImageService
 from app.service.IO.result_service import ResultService
 from app.service.computation.cluster_service import ClusterService
@@ -23,7 +21,6 @@ from app.core.exceptions import ResourceNotFoundError, CalculationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-from app.core.executor import get_executor # <--- Импорт
 
 # Создаем пул потоков для тяжелых операций OpenCV, чтобы не блокировать Event Loop
 executor = get_executor()

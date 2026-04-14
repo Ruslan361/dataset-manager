@@ -19,6 +19,15 @@ from app.api.v1.endpoints.analysis.calculate_mean_lines import router as mean_li
 from app.api.v1.endpoints.analysis.gaussian_blur import router as gaussian_blur_router
 from app.api.v1.endpoints.analysis.k_means import router as k_means_router
 from app.api.v1.endpoints.IO.archive import router as archive_router
+from app.api.v1.endpoints.IO.create_dataset import router as create_dataset_router
+from app.api.v1.endpoints.IO.get_dataset import router as get_dataset_router
+from app.api.v1.endpoints.IO.update_dataset import router as update_dataset_router
+from app.api.v1.endpoints.IO.remove_dataset import router as remove_dataset_router
+from app.api.v1.endpoints.IO.get_images_from_dataset import router as get_images_router
+from app.api.v1.endpoints.IO.upload_image import router as upload_image_router
+from app.api.v1.endpoints.IO.remove_image import router as remove_image_router
+from app.api.v1.endpoints.IO.download_image import router as download_image_router
+from app.api.v1.endpoints.IO.get_image_info import router as get_image_info_router
 
 # Используем SQLite в памяти
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -78,6 +87,24 @@ async def client(app_overrides):
     base_url = "http://test/api/v1"
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url=base_url) as ac:
+        yield ac
+
+
+@pytest_asyncio.fixture(scope="function")
+async def io_client(app_overrides):
+    """Тестовый клиент с IO-роутерами (датасеты, изображения)."""
+    app = FastAPI()
+    app.include_router(create_dataset_router,      prefix="/dataset")
+    app.include_router(get_dataset_router,         prefix="/dataset")
+    app.include_router(update_dataset_router,      prefix="/dataset")
+    app.include_router(remove_dataset_router,      prefix="/dataset")
+    app.include_router(get_images_router,          prefix="/dataset")
+    app.include_router(upload_image_router,        prefix="/image")
+    app.include_router(remove_image_router,        prefix="/image")
+    app.include_router(download_image_router,      prefix="/image")
+    app.include_router(get_image_info_router,      prefix="/image")
+    app.dependency_overrides[get_db] = app_overrides
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 

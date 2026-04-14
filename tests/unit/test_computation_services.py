@@ -83,9 +83,9 @@ def test_kmeans_computation_logic(bgr_image):
         )
         
         # Проверки
-        data = result["result_data"]
-        assert "colored_image" in result
-        assert len(data["centers_sorted"]) == n_clusters
+        assert result.colored_image is not None
+        data = result.result_data
+        assert len(data.centers_sorted) == n_clusters
         # Проверяем, что центры отсортированы (10 < 200)
-        assert data["centers_sorted"][0] < data["centers_sorted"][1]
-        assert data["processed_pixels"] == 100
+        assert data.centers_sorted[0] < data.centers_sorted[1]
+        assert data.processed_pixels == 100

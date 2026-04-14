@@ -1,5 +1,4 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, JSON, TIMESTAMP, func, event
-from sqlalchemy.orm import relationship
 from app.db.base import Base
 import os
 import logging

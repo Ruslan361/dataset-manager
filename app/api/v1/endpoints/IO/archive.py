@@ -1,12 +1,24 @@
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from pathlib import Path
+import logging
 from app.core.task_manager import task_manager, TaskStatus
 from app.service.IO.archive_service import ArchiveService
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.dataset import Dataset
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+def _delete_file(path: str):
+    try:
+        p = Path(path)
+        if p.exists():
+            p.unlink()
+            logger.info(f"Deleted export file after download: {p}")
+    except Exception as e:
+        logger.warning(f"Could not delete export file {path}: {e}")
 
 # 1. ЗАПУСК ЭКСПОРТА
 @router.post("/export/{dataset_id}")
@@ -69,14 +81,16 @@ async def get_export_status(task_id: str):
 
 # 4. СКАЧИВАНИЕ
 @router.get("/download/{task_id}")
-async def download_export(task_id: str):
+async def download_export(task_id: str, background_tasks: BackgroundTasks):
     task = task_manager.get_task(task_id)
     if not task or task.status != TaskStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Export not ready or failed")
-    
+
     file_path = task.result.get("file_path")
     filename = task.result.get("filename", "export.zip")
-    
+
+    background_tasks.add_task(_delete_file, file_path)
+
     return FileResponse(
         path=file_path,
         filename=filename,

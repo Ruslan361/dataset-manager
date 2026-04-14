@@ -186,14 +186,14 @@ class ArchiveService(BaseService):
         temp_dir = Path(f"temp_import_{uuid.uuid4()}")
         temp_dir.mkdir(parents=True, exist_ok=True)
         zip_path = temp_dir / "upload.zip"
+        loop = asyncio.get_running_loop()
 
         try:
             async with aiofiles.open(zip_path, "wb") as f:
-                while content := await file.read(1024 * 1024): 
+                while content := await file.read(1024 * 1024):
                     await f.write(content)
 
             # 2. Распаковка (CPU/Disk IO bound -> executor)
-            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 get_executor(), 
                 shutil.unpack_archive, 

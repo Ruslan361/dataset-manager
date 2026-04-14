@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 import os
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from app.service.IO.image_service import ImageService
 
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def db_session(tmp_path, monkeypatch):
     # ensure tests run isolated from repo filesystem
     monkeypatch.chdir(tmp_path)

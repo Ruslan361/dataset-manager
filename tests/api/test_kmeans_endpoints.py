@@ -126,15 +126,16 @@ async def test_kmeans_background_task_logic(db_session, sample_image):
             
         mock_loop.return_value.run_in_executor = fake_run_in_executor
         
-        # Мок результата вычислений
-        mock_calc.return_value = {
-            "result_data": {
-                "centers_sorted": [[0], [255]],
-                "compactness": 0.1,
-                "processed_pixels": 100
-            },
-            "colored_image": fake_image
-        }
+        # Мок результата вычислений — возвращаем настоящий KMeansResult
+        from app.service.computation.cluster_service import KMeansResult, ResultData
+        mock_calc.return_value = KMeansResult(
+            result_data=ResultData(
+                centers_sorted=[0.0, 255.0],
+                compactness=0.1,
+                processed_pixels=100
+            ),
+            colored_image=fake_image
+        )
 
         # ВЫЗОВ
         await run_kmeans_task(

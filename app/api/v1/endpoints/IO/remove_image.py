@@ -16,59 +16,28 @@ router = APIRouter()
 async def delete_all_image_results(db: AsyncSession, image_id: int):
     """Удаление всех результатов связанных с изображением"""
     try:
-        # Получаем все результаты для данного изображения
         results_query = select(Results).where(Results.image_id == image_id)
         results = await db.execute(results_query)
         result_records = results.scalars().all()
-        
+
         for result_record in result_records:
             try:
                 result_data = result_record.result
-                method_name = result_record.name_method
-                
                 if isinstance(result_data, dict):
-                    # Для K-means - особая структура с result_image_path
-                    if method_name == "kmeans":
-                        result_image_path = result_data.get("result_image_path")
-                        if result_image_path and os.path.exists(result_image_path):
-                            os.remove(result_image_path)
-                            logger.info(f"Deleted K-means result file: {result_image_path}")
-                    
-                    # Для других методов - стандартные пути к файлам
-                    else:
-                        # Проверяем различные возможные поля с путями к файлам
-                        file_path_fields = [
-                            "output_file_path", 
-                            "processed_image_path", 
-                            "result_path",
-                            "blurred_image_path",
-                            "analysis_result_path"
-                        ]
-                        
-                        for field in file_path_fields:
-                            file_path = result_data.get(field)
-                            if file_path and os.path.exists(file_path):
-                                os.remove(file_path)
-                                logger.info(f"Deleted {method_name} result file: {file_path}")
-                        
-                        # Проверяем массивы файлов
-                        if "result_files" in result_data and isinstance(result_data["result_files"], list):
-                            for file_path in result_data["result_files"]:
-                                if file_path and os.path.exists(file_path):
-                                    os.remove(file_path)
-                                    logger.info(f"Deleted {method_name} result file: {file_path}")
-                
+                    for resource in result_data.get("resources", []):
+                        file_path = resource.get("path")
+                        if file_path and os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.info(f"Deleted result file: {file_path}")
             except Exception as e:
-                logger.warning(f"Failed to delete files for {result_record.name_method} result {result_record.id}: {str(e)}")
+                logger.warning(f"Failed to delete files for result {result_record.id}: {str(e)}")
                 continue
-        
-        # Удаляем все записи результатов из БД
+
         if result_records:
-            delete_query = delete(Results).where(Results.image_id == image_id)
-            await db.execute(delete_query)
+            await db.execute(delete(Results).where(Results.image_id == image_id))
             await db.commit()
             logger.info(f"Deleted {len(result_records)} result records for image {image_id}")
-        
+
     except Exception as e:
         logger.error(f"Error deleting results for image {image_id}: {str(e)}")
         await db.rollback()

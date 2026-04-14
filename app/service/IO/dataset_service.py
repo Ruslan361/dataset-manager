@@ -1,10 +1,12 @@
 from typing import Optional, List
-from sqlalchemy import select, asc, desc, func
+from sqlalchemy import select, delete, asc, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 import logging
 
 from app.models.dataset import Dataset
+from app.models.image import Image
+from app.models.result import Results
 from app.service.IO.base_service import BaseService
 from app.service.IO.image_service import ImageService
 from app.service.IO.file_services import FileService
@@ -73,8 +75,8 @@ class DatasetService(BaseService):
             logger.error(f"Error getting datasets list: {str(e)}")
             raise HTTPException(status_code=500, detail="Database error")
     
-    async def delete_dataset(self, dataset_id: int) -> Dataset:
-        """Удаление датасета из БД с каскадным удалением изображений и файлов"""
+    async def delete_dataset(self, dataset_id: int) -> tuple[Dataset, int]:
+        """Удаление датасета из БД с каскадным удалением изображений, результатов и файлов"""
         try:
             dataset = await self.get_dataset_by_id(dataset_id)
             if not dataset:
@@ -83,25 +85,36 @@ class DatasetService(BaseService):
                     detail=f"Dataset with id {dataset_id} not found"
                 )
 
-            # Удаляем все записи изображений из БД через ImageService (возвращает количество)
-            image_service = ImageService(self.db)
-            images_count = await image_service.delete_images_by_dataset(dataset_id)
-            # Зафиксируем удаление изображений
-            await self.db.commit()
+            # Получаем ID всех изображений датасета
+            img_rows = (await self.db.execute(
+                select(Image.id).where(Image.dataset_id == dataset_id)
+            )).scalars().all()
+            images_count = len(img_rows)
 
-            # Удаляем файлы изображений и результаты с диска
+            # Удаляем записи Results для всех изображений датасета
+            if img_rows:
+                await self.db.execute(
+                    delete(Results).where(Results.image_id.in_(img_rows))
+                )
+
+            # Удаляем записи Image
+            await self.db.execute(
+                delete(Image).where(Image.dataset_id == dataset_id)
+            )
+
+            # Удаляем файлы с диска
             try:
                 FileService.remove_directory(Path(f"uploads/images/{dataset_id}"))
                 FileService.remove_directory(Path(f"uploads/results/{dataset_id}"))
             except Exception as fe:
                 logger.warning(f"File system cleanup failed for dataset {dataset_id}: {fe}")
 
-            # Удаляем сам датасет
+            # Удаляем сам датасет и фиксируем всё разом
             await self.db.delete(dataset)
             await self.db.commit()
 
             logger.info(f"Deleted dataset: {dataset_id}, removed {images_count} images")
-            return dataset
+            return dataset, images_count
 
         except HTTPException:
             await self.rollback_db()
