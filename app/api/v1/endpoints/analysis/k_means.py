@@ -191,7 +191,8 @@ async def apply_kmeans(
             "max_iterations": kmeans_params.max_iterations,
             "epsilon": kmeans_params.epsilon,
             "flags": kmeans_params.flags.value,
-            "colors": kmeans_params.colors
+            "colors": kmeans_params.colors,
+            "attempts": kmeans_params.attempts
         }
         
         # create_pending_result удалит старые результаты этого метода для этой картинки

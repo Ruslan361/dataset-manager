@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import router as api_router
 from app.core.config import settings
-from app.db.init_db import init_db
+from app.db.init_db import init_db, cleanup_stale_processing_results
 from contextlib import asynccontextmanager
 from app.core.executor import shutdown_executor
 from pathlib import Path
@@ -29,6 +29,7 @@ def cleanup_exports_dir():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await cleanup_stale_processing_results()
     cleanup_exports_dir()
     yield
     shutdown_executor()
