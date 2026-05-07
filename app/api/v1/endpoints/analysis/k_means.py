@@ -17,6 +17,7 @@ from app.core.executor import get_executor
 from app.service.IO.image_service import ImageService
 from app.service.IO.result_service import ResultService
 from app.service.computation.cluster_service import ClusterService
+from app.service.computation.crop_service import CropService
 from app.core.exceptions import ResourceNotFoundError, CalculationError
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ async def apply_kmeans(
         # Загружаем изображение сразу, чтобы вернуть 404/400, если файл битый, до запуска задачи
         bgr_image = image_service.load_image_cv2(file_path)
 
-        # Если в БД есть последний результат "crop", применяем сохранённые координаты.
+        # Если в БД есть результат "crop" — применяем его; иначе запускаем авто-кроп.
         try:
             crop_record = await result_service.get_latest_result(image_id, "crop")
             if crop_record:
@@ -167,19 +168,26 @@ async def apply_kmeans(
                 bottom = params.get("bottom")
                 left = params.get("left")
                 right = params.get("right")
-                # Проверяем, что все координаты целые числа
                 if all(isinstance(v, int) for v in (top, bottom, left, right)):
                     h, w = bgr_image.shape[:2]
-                    # Ограничиваем координаты пределами изображения
                     top = max(0, min(h, top))
                     bottom = max(0, min(h, bottom))
                     left = max(0, min(w, left))
                     right = max(0, min(w, right))
-                    # Применяем кроп только если область непустая
                     if bottom > top and right > left:
                         bgr_image = bgr_image[top:bottom, left:right]
+            else:
+                # Нет сохранённого кропа — вычисляем авто-кроп и сохраняем в БД
+                top, bottom, left, right = CropService.compute_auto_crop(bgr_image)
+                bgr_image = bgr_image[top:bottom, left:right]
+                await result_service.save_structured_result(
+                    image_id=image_id,
+                    method_name="crop",
+                    params={"top": top, "bottom": bottom, "left": left, "right": right},
+                    data=None,
+                )
         except Exception:
-            # В случае проблем с чтением/парсингом записи — продолжаем без кропа
+            # В случае любой ошибки кропа — продолжаем с оригинальным изображением
             pass
 
         # 2. Создаем запись в БД со статусом "processing"
