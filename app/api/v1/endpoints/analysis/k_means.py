@@ -57,24 +57,53 @@ class KMeansRequest(BaseModel):
 
 async def run_kmeans_task(
     result_id: int,       # ID записи в БД, которую нужно обновить
-    image_id: int, 
-    params: KMeansRequest, 
-    bgr_image: np.ndarray, 
+    image_id: int,
+    params: KMeansRequest,
+    bgr_image: np.ndarray,
     dataset_id: int
 ):
     """
     Фоновая задача:
-    1. Выполняет K-Means (CPU-bound).
-    2. Сохраняет результат на диск (IO).
-    3. Обновляет запись в БД (processing -> completed/failed).
+    1. Применяет кроп (из БД или авто-кроп).
+    2. Выполняет K-Means (CPU-bound).
+    3. Сохраняет результат на диск (IO).
+    4. Обновляет запись в БД (processing -> completed/failed).
     """
     # Создаем новую сессию БД, так как это фоновая задача
     async with AsyncSessionLocal() as db:
         result_service = ResultService(db)
         try:
             loop = asyncio.get_running_loop()
-            
-            # 1. Вычисления (в отдельном потоке, чтобы не блокировать сервер)
+
+            # 1. Кроп: берём из БД или вычисляем авто-кроп в потоке
+            try:
+                crop_record = await result_service.get_latest_result(image_id, "crop")
+                if crop_record:
+                    p = (crop_record.result or {}).get("params") or {}
+                    top, bottom, left, right = p.get("top"), p.get("bottom"), p.get("left"), p.get("right")
+                    if all(isinstance(v, int) for v in (top, bottom, left, right)):
+                        h, w = bgr_image.shape[:2]
+                        top = max(0, min(h, top))
+                        bottom = max(0, min(h, bottom))
+                        left = max(0, min(w, left))
+                        right = max(0, min(w, right))
+                        if bottom > top and right > left:
+                            bgr_image = bgr_image[top:bottom, left:right]
+                else:
+                    top, bottom, left, right = await loop.run_in_executor(
+                        executor, CropService.compute_auto_crop, bgr_image
+                    )
+                    bgr_image = bgr_image[top:bottom, left:right]
+                    await result_service.save_structured_result(
+                        image_id=image_id,
+                        method_name="crop",
+                        params={"top": top, "bottom": bottom, "left": left, "right": right},
+                        data=None,
+                    )
+            except Exception:
+                pass  # при любой ошибке кропа — продолжаем с оригинальным изображением
+
+            # 2. Вычисления (в отдельном потоке, чтобы не блокировать сервер)
             calc_res = await loop.run_in_executor(
                 executor,
                 ClusterService.apply_kmeans,
@@ -88,7 +117,7 @@ async def run_kmeans_task(
                 params.colors
             )
             
-            # 2. Сохранение файла на диск
+            # 3. Сохранение файла на диск
             filename = f"{image_id}_kmeans_{params.nclusters}.jpg"
             save_dir = Path(f"uploads/results/{dataset_id}")
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -102,15 +131,17 @@ async def run_kmeans_task(
                 calc_res.colored_image
             )
             
-            # 3. Обновление записи в БД
+            # 4. Обновление записи в БД
             stats = calc_res.result_data
             
             # Данные для сохранения (статус меняется на completed)
             data_to_save = {
-                "status": "completed", 
+                "status": "completed",
                 "centers_sorted": getattr(stats, "centers_sorted", []),
                 "compactness": float(getattr(stats, "compactness", 0.0)),
-                "processed_pixels": int(getattr(stats, "processed_pixels", 0))
+                "processed_pixels": int(getattr(stats, "processed_pixels", 0)),
+                "cluster_ranges": getattr(stats, "cluster_ranges", []),
+                "cluster_std_dev": getattr(stats, "cluster_std_dev", []),
             }
             
             # Ресурсы (ссылка на файл)
@@ -158,37 +189,6 @@ async def apply_kmeans(
         file_path = image_service.get_image_file_path(image)
         # Загружаем изображение сразу, чтобы вернуть 404/400, если файл битый, до запуска задачи
         bgr_image = image_service.load_image_cv2(file_path)
-
-        # Если в БД есть результат "crop" — применяем его; иначе запускаем авто-кроп.
-        try:
-            crop_record = await result_service.get_latest_result(image_id, "crop")
-            if crop_record:
-                params = (crop_record.result or {}).get("params") or {}
-                top = params.get("top")
-                bottom = params.get("bottom")
-                left = params.get("left")
-                right = params.get("right")
-                if all(isinstance(v, int) for v in (top, bottom, left, right)):
-                    h, w = bgr_image.shape[:2]
-                    top = max(0, min(h, top))
-                    bottom = max(0, min(h, bottom))
-                    left = max(0, min(w, left))
-                    right = max(0, min(w, right))
-                    if bottom > top and right > left:
-                        bgr_image = bgr_image[top:bottom, left:right]
-            else:
-                # Нет сохранённого кропа — вычисляем авто-кроп и сохраняем в БД
-                top, bottom, left, right = CropService.compute_auto_crop(bgr_image)
-                bgr_image = bgr_image[top:bottom, left:right]
-                await result_service.save_structured_result(
-                    image_id=image_id,
-                    method_name="crop",
-                    params={"top": top, "bottom": bottom, "left": left, "right": right},
-                    data=None,
-                )
-        except Exception:
-            # В случае любой ошибки кропа — продолжаем с оригинальным изображением
-            pass
 
         # 2. Создаем запись в БД со статусом "processing"
         

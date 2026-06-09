@@ -17,6 +17,8 @@ class ResultData(BaseModel):
     centers_sorted: list
     compactness: float
     processed_pixels: int
+    cluster_ranges: list = []  # [{"min": float, "max": float, "range": float}, ...]
+    cluster_std_dev: list = []  # [float, ...]
 
 class KMeansResult(BaseModel):
     result_data: ResultData
@@ -74,21 +76,33 @@ class ClusterService:
             label_mapping[sorted_indices] = np.arange(nclusters)
             remapped_labels = label_mapping[labels.flatten()]
             
-            # Создание изображения
+            # Создание изображения + диапазоны яркости по кластерам
             height, width = L_channel.shape
             colored_image = np.zeros((height, width, 3), dtype=np.uint8)
-            
+            cluster_ranges = []
+            cluster_std_dev = []
+
             for i in range(nclusters):
                 mask = remapped_labels == i
-                # RGB -> BGR для OpenCV
-                color_bgr = (colors[i][2], colors[i][1], colors[i][0])
-                colored_image[mask.reshape(height, width)] = color_bgr
-                
+                colored_image[mask.reshape(height, width)] = (colors[i][2], colors[i][1], colors[i][0])
+                pixels = data[mask]
+                if len(pixels):
+                    lo, hi = float(pixels.min()), float(pixels.max())
+                    cluster_ranges.append({"min": lo, "max": hi, "range": hi - lo})
+                    center_value = float(sorted_centers[i])
+                    mse = float(np.mean((pixels - center_value) ** 2))
+                    cluster_std_dev.append(float(np.sqrt(mse)))
+                else:
+                    cluster_ranges.append({"min": 0.0, "max": 0.0, "range": 0.0})
+                    cluster_std_dev.append(0.0)
+
             return KMeansResult(
                 result_data=ResultData(
                     centers_sorted=sorted_centers.tolist(),
                     compactness=float(compactness),
-                    processed_pixels=len(data)
+                    processed_pixels=len(data),
+                    cluster_ranges=cluster_ranges,
+                    cluster_std_dev=cluster_std_dev
                 ),
                 colored_image=colored_image
             )

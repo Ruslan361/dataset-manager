@@ -11,6 +11,7 @@ dependencies = [
     "alembic>=1.18.4",
     "fastapi>=0.131.0",
     "httpx>=0.28.1",
+    "ipykernel>=7.2.0",
     "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "opencv-python>=4.13.0.92",
@@ -22,11 +23,18 @@ dependencies = [
     "python-multipart>=0.0.22",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
     "sqlalchemy>=2.0.46",
     "uvicorn>=0.41.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.67.3",
+    "albumentations>=2.0.8",
+    "segmentation-models-pytorch>=0.5.0",
 ]
 
 [dependency-groups]
 dev = [
     "python-docx>=1.2.0",
 ]
+
