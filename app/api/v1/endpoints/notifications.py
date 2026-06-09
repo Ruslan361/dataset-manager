@@ -13,7 +13,6 @@ async def subscribe_to_task(websocket: WebSocket, task_id: str):
     
     await websocket.accept()
     
-    # Проверяем существование задачи
     task = task_manager.get_task(task_id)
     if not task:
         await websocket.send_text(json.dumps({
@@ -23,14 +22,12 @@ async def subscribe_to_task(websocket: WebSocket, task_id: str):
         await websocket.close()
         return
     
-    # Отправляем текущий статус
     current_status = task_manager.get_task_summary(task_id)
     await websocket.send_text(json.dumps({
         "type": "current_status",
         **current_status
     }))
     
-    # Callback функция для отправки уведомлений
     async def send_notification(notification: dict):
         try:
             await websocket.send_text(json.dumps({
@@ -40,14 +37,11 @@ async def subscribe_to_task(websocket: WebSocket, task_id: str):
         except Exception as e:
             logger.error(f"Error sending notification: {e}")
     
-    # Подписываемся на обновления
     task_manager.subscribe_to_task(task_id, send_notification)
     
     try:
-        # Держим соединение открытым
         while True:
             try:
-                # Ожидаем ping от клиента
                 message = await websocket.receive_text()
                 data = json.loads(message)
                 
@@ -71,7 +65,6 @@ async def subscribe_to_task(websocket: WebSocket, task_id: str):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
-        # Отписываемся при закрытии соединения
         task_manager.unsubscribe_from_task(task_id, send_notification)
         logger.info(f"Client unsubscribed from task {task_id}")
 

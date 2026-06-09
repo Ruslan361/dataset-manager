@@ -11,14 +11,14 @@ class KMeansParams(BaseModel):
     attempts: int
     epsilon: float
     flags_type: str  # 'pp' or 'random'
-    colors: list  # List of RGB tuples
+    colors: list
 
 class ResultData(BaseModel):
     centers_sorted: list
     compactness: float
     processed_pixels: int
     cluster_ranges: list = []  # [{"min": float, "max": float, "range": float}, ...]
-    cluster_std_dev: list = []  # [float, ...]
+    cluster_std_dev: list = []
 
 class KMeansResult(BaseModel):
     result_data: ResultData
@@ -30,7 +30,7 @@ class ClusterService:
     def apply_kmeans(
         bgr_image: np.ndarray, 
         nclusters: int,
-        criteria_type: str, # передаем enum.value или строку
+        criteria_type: str,
         max_iterations: int,
         attempts: int,
         epsilon: float,
@@ -51,7 +51,6 @@ class ClusterService:
             L_channel = processor.getLChanel()
             data = L_channel.reshape((-1, 1)).astype(np.float32)
             
-            # Настройка критериев
             if criteria_type == 'epsilon':
                 cv_criteria = (cv2.TERM_CRITERIA_EPS, max_iterations, epsilon)
             elif criteria_type == 'max iterations':
@@ -59,15 +58,12 @@ class ClusterService:
             else:
                 cv_criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, max_iterations, epsilon)
             
-            # Настройка флагов
             cv_flags = cv2.KMEANS_PP_CENTERS if flags_type == 'pp' else cv2.KMEANS_RANDOM_CENTERS
             
-            # K-means
             compactness, labels, centers = cv2.kmeans(
                 data, nclusters, None, cv_criteria, attempts, cv_flags
             )
             
-            # Сортировка центров и переназначение меток
             centers_flat = centers.flatten()
             sorted_indices = np.argsort(centers_flat)
             sorted_centers = centers_flat[sorted_indices]
@@ -76,7 +72,6 @@ class ClusterService:
             label_mapping[sorted_indices] = np.arange(nclusters)
             remapped_labels = label_mapping[labels.flatten()]
             
-            # Создание изображения + диапазоны яркости по кластерам
             height, width = L_channel.shape
             colored_image = np.zeros((height, width, 3), dtype=np.uint8)
             cluster_ranges = []

@@ -17,7 +17,6 @@ async def download_image(
     image_service = ImageService(db)
     
     try:
-        # Получение изображения из БД
         image = await image_service.get_image_by_id(image_id)
         if not image:
             raise HTTPException(
@@ -25,7 +24,6 @@ async def download_image(
                 detail=f"Image with id {image_id} not found"
             )
         
-        # Получение пути к файлу и проверка существования
         file_path = image_service.get_image_file_path(image)
         if not image_service.validate_file_exists(file_path):
             logger.error(f"File not found: {file_path}")
@@ -36,7 +34,6 @@ async def download_image(
         
         logger.info(f"Serving image {image_id}: {file_path}")
         
-        # Возвращаем файл с оригинальным именем
         return FileResponse(
             path=str(file_path),
             filename=image.original_filename,

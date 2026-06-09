@@ -17,8 +17,6 @@ async def remove_dataset(
     dataset_service = DatasetService(db)
 
     try:
-        # Удаление датасета вместе с изображениями, результатами и файлами
-        # (404 бросает сам delete_dataset если датасет не найден)
         deleted_dataset, images_count = await dataset_service.delete_dataset(dataset_id)
 
         success_message = f"Dataset '{deleted_dataset.title}' (ID: {dataset_id}) and {images_count} images deleted successfully"
@@ -31,7 +29,6 @@ async def remove_dataset(
         )
         
     except HTTPException:
-        # HTTPException уже обработаны в сервисах
         raise
     except Exception as e:
         logger.error(f"Unexpected error in remove_dataset endpoint: {str(e)}")

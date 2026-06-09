@@ -23,10 +23,7 @@ from app.core.exceptions import ResourceNotFoundError, CalculationError
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Создаем пул потоков для тяжелых операций OpenCV, чтобы не блокировать Event Loop
 executor = get_executor()
-
-# --- Pydantic Models ---
 
 class CriteriaEnum(Enum):
     EPSILON = 'epsilon'
@@ -48,15 +45,12 @@ class KMeansRequest(BaseModel):
     
     @field_validator('colors')
     def validate_colors_count(cls, v, values):
-        # Проверяем, что количество цветов совпадает с количеством кластеров
         if 'nclusters' in values.data and len(v) != values.data['nclusters']:
             raise ValueError(f"Number of colors ({len(v)}) must match nclusters ({values.data['nclusters']})")
         return v
 
-# --- Background Task ---
-
 async def run_kmeans_task(
-    result_id: int,       # ID записи в БД, которую нужно обновить
+    result_id: int,
     image_id: int,
     params: KMeansRequest,
     bgr_image: np.ndarray,
@@ -69,13 +63,11 @@ async def run_kmeans_task(
     3. Сохраняет результат на диск (IO).
     4. Обновляет запись в БД (processing -> completed/failed).
     """
-    # Создаем новую сессию БД, так как это фоновая задача
     async with AsyncSessionLocal() as db:
         result_service = ResultService(db)
         try:
             loop = asyncio.get_running_loop()
 
-            # 1. Кроп: берём из БД или вычисляем авто-кроп в потоке
             try:
                 crop_record = await result_service.get_latest_result(image_id, "crop")
                 if crop_record:
@@ -101,9 +93,8 @@ async def run_kmeans_task(
                         data=None,
                     )
             except Exception:
-                pass  # при любой ошибке кропа — продолжаем с оригинальным изображением
+                pass
 
-            # 2. Вычисления (в отдельном потоке, чтобы не блокировать сервер)
             calc_res = await loop.run_in_executor(
                 executor,
                 ClusterService.apply_kmeans,
@@ -117,13 +108,11 @@ async def run_kmeans_task(
                 params.colors
             )
             
-            # 3. Сохранение файла на диск
             filename = f"{image_id}_kmeans_{params.nclusters}.jpg"
             save_dir = Path(f"uploads/results/{dataset_id}")
             save_dir.mkdir(parents=True, exist_ok=True)
             file_path = save_dir / filename
             
-            # cv2.imwrite блокирующий, запускаем в потоке
             await loop.run_in_executor(
                 executor,
                 cv2.imwrite,
@@ -131,10 +120,8 @@ async def run_kmeans_task(
                 calc_res.colored_image
             )
             
-            # 4. Обновление записи в БД
             stats = calc_res.result_data
             
-            # Данные для сохранения (статус меняется на completed)
             data_to_save = {
                 "status": "completed",
                 "centers_sorted": getattr(stats, "centers_sorted", []),
@@ -144,7 +131,6 @@ async def run_kmeans_task(
                 "cluster_std_dev": getattr(stats, "cluster_std_dev", []),
             }
             
-            # Ресурсы (ссылка на файл)
             resources_to_save = [{
                 "type": "image",
                 "key": "clustered_image",
@@ -161,10 +147,7 @@ async def run_kmeans_task(
             
         except Exception as e:
             logger.error(f"K-means task failed for result_id {result_id}: {e}")
-            # Важно: записываем ошибку в БД, чтобы фронтенд узнал о провале
             await result_service.mark_as_failed(result_id, str(e))
-
-# --- Endpoints ---
 
 @router.post("/kmeans/{image_id}")
 async def apply_kmeans(
@@ -178,7 +161,6 @@ async def apply_kmeans(
     Возвращает 200 OK со статусом "processing" сразу после валидации.
     """
     try:
-        # 1. Валидация и загрузка изображения
         image_service = ImageService(db)
         result_service = ResultService(db)
 
@@ -187,12 +169,9 @@ async def apply_kmeans(
             raise ResourceNotFoundError(f"Image {image_id} not found")
 
         file_path = image_service.get_image_file_path(image)
-        # Загружаем изображение сразу, чтобы вернуть 404/400, если файл битый, до запуска задачи
         bgr_image = image_service.load_image_cv2(file_path)
 
-        # 2. Создаем запись в БД со статусом "processing"
         
-        # Сохраняем параметры запуска, чтобы они были видны на фронтенде
         params_dict = {
             "nclusters": kmeans_params.nclusters,
             "criteria": kmeans_params.criteria.value,
@@ -203,7 +182,6 @@ async def apply_kmeans(
             "attempts": kmeans_params.attempts
         }
         
-        # create_pending_result удалит старые результаты этого метода для этой картинки
         pending_record = await result_service.create_pending_result(
             image_id=image_id,
             method_name="kmeans",
@@ -211,7 +189,6 @@ async def apply_kmeans(
             clear_previous=True 
         )
         
-        # 3. Добавляем задачу в фон
         background_tasks.add_task(
             run_kmeans_task,
             result_id=pending_record.id,
@@ -235,7 +212,6 @@ async def apply_kmeans(
         logger.error(f"Error starting kmeans task: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
 @router.get("/kmeans/{image_id}/result")
 async def get_kmeans_result(image_id: int, db: AsyncSession = Depends(get_db)):
     """
@@ -245,19 +221,15 @@ async def get_kmeans_result(image_id: int, db: AsyncSession = Depends(get_db)):
     try:
         result_service = ResultService(db)
         
-        # Получаем запись (метаданные)
         record = await result_service.get_latest_result(image_id, "kmeans")
         
         if not record:
             raise HTTPException(status_code=404, detail="K-means calculation never started for this image")
             
-        # Распаковываем данные (params + data)
         data = await result_service.get_latest_result_data(image_id, "kmeans")
         
-        # Определяем статус (для обратной совместимости со старыми записями по умолчанию completed)
         status = data.get("status", "completed")
         
-        # Проверяем наличие файла картинки (только если статус completed)
         has_image = False
         image_path = None
         
@@ -275,9 +247,9 @@ async def get_kmeans_result(image_id: int, db: AsyncSession = Depends(get_db)):
             "method": record.name_method,
             "status": status,
             "created_at": record.created_at,
-            "result": data,           # Содержит params, centers, compactness и т.д.
+            "result": data,
             "has_result_image": has_image,
-            "error": data.get("error") # Будет заполнено, если status == failed
+            "error": data.get("error")
         }
 
     except HTTPException:
@@ -285,7 +257,6 @@ async def get_kmeans_result(image_id: int, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error getting kmeans result: {e}")
         raise HTTPException(status_code=500, detail="Error getting result")
-
 
 @router.get("/kmeans/{image_id}/result/image")
 async def get_kmeans_result_image(image_id: int, db: AsyncSession = Depends(get_db)):
@@ -299,14 +270,12 @@ async def get_kmeans_result_image(image_id: int, db: AsyncSession = Depends(get_
         if not record:
              raise HTTPException(status_code=404, detail="Result not found")
         
-        # Проверяем статус в самом JSON
         data = await result_service.get_latest_result_data(image_id, "kmeans")
         if data.get("status") == "processing":
             raise HTTPException(status_code=400, detail="Image is still processing")
         if data.get("status") == "failed":
              raise HTTPException(status_code=400, detail="Processing failed, no image available")
 
-        # Ищем путь к файлу
         resources = record.result.get("resources", [])
         image_path = None
         for r in resources:
@@ -317,7 +286,6 @@ async def get_kmeans_result_image(image_id: int, db: AsyncSession = Depends(get_
         if not image_path or not os.path.exists(image_path):
             raise HTTPException(status_code=404, detail="Result file missing on server")
         
-        # Получаем имя файла для заголовка Content-Disposition
         filename = Path(image_path).name
             
         return FileResponse(

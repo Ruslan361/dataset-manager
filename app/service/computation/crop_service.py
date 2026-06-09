@@ -3,7 +3,6 @@ import numpy as np
 from typing import Optional, Tuple
 from app.core.exceptions import CalculationError
 
-
 class CropService:
     @staticmethod
     def compute_auto_crop(bgr_image: np.ndarray, white_thresh: float = 0.9) -> Tuple[int, int, int, int]:

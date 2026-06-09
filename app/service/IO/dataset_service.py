@@ -55,12 +55,10 @@ class DatasetService(BaseService):
     ) -> tuple[List[Dataset], int]:
         """Получение списка датасетов с пагинацией"""
         try:
-            # Подсчет общего количества
             count_stmt = select(func.count(Dataset.id))
             total_result = await self.db.execute(count_stmt)
             total_count = total_result.scalar()
             
-            # Получение датасетов
             stmt = select(Dataset)\
                 .order_by(order_by)\
                 .offset(start)\
@@ -85,31 +83,26 @@ class DatasetService(BaseService):
                     detail=f"Dataset with id {dataset_id} not found"
                 )
 
-            # Получаем ID всех изображений датасета
             img_rows = (await self.db.execute(
                 select(Image.id).where(Image.dataset_id == dataset_id)
             )).scalars().all()
             images_count = len(img_rows)
 
-            # Удаляем записи Results для всех изображений датасета
             if img_rows:
                 await self.db.execute(
                     delete(Results).where(Results.image_id.in_(img_rows))
                 )
 
-            # Удаляем записи Image
             await self.db.execute(
                 delete(Image).where(Image.dataset_id == dataset_id)
             )
 
-            # Удаляем файлы с диска
             try:
                 FileService.remove_directory(Path(f"uploads/images/{dataset_id}"))
                 FileService.remove_directory(Path(f"uploads/results/{dataset_id}"))
             except Exception as fe:
                 logger.warning(f"File system cleanup failed for dataset {dataset_id}: {fe}")
 
-            # Удаляем сам датасет и фиксируем всё разом
             await self.db.delete(dataset)
             await self.db.commit()
 

@@ -10,20 +10,11 @@ class Results(Base):
     __tablename__ = "results"
     id = Column(Integer, primary_key=True, index=True)
     name_method = Column(String)
-    # Структура JSON теперь ожидается такой:
-    # {
-    #    "params": { ... },
-    #    "data": { ... },
-    #    "resources": [ {"type": "image", "path": "uploads/...", "key": "result_img"} ]
-    # }
     result = Column(JSON, nullable=False)
     image_id = Column(Integer, ForeignKey("images.id"))
     created_at = Column(TIMESTAMP, server_default=func.now())
     
-    # Опционально: связь с image, чтобы работали каскады на уровне ORM
-    # image = relationship("Image", back_populates="results")
 
-# Обработчик события после удаления записи
 @event.listens_for(Results, 'after_delete')
 def receive_after_delete(mapper, connection, target):
     """

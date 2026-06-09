@@ -11,11 +11,6 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from app.models.dataset import Dataset
 from app.models.image import Image
 
-
-# ─────────────────────────────────────────────
-# DATASET ENDPOINTS
-# ─────────────────────────────────────────────
-
 class TestCreateDataset:
     @pytest.mark.asyncio
     async def test_create_returns_success(self, io_client):
@@ -34,7 +29,6 @@ class TestCreateDataset:
     async def test_create_missing_title_returns_422(self, io_client):
         r = await io_client.post("/dataset/create-dataset", json={"description": "only desc"})
         assert r.status_code == 422
-
 
 class TestGetDatasetsList:
     @pytest.mark.asyncio
@@ -61,10 +55,8 @@ class TestGetDatasetsList:
 
     @pytest.mark.asyncio
     async def test_invalid_range_returns_422(self, io_client):
-        # end <= start
         r = await io_client.post("/dataset/get-datasets-list", json={"start": 5, "end": 5})
         assert r.status_code == 422
-
 
 class TestUpdateDataset:
     @pytest.mark.asyncio
@@ -91,7 +83,6 @@ class TestUpdateDataset:
         r = await io_client.put(f"/dataset/update-dataset/{ds_id}", json={})
         assert r.status_code == 400
 
-
 class TestDeleteDataset:
     @pytest.mark.asyncio
     async def test_delete_existing(self, io_client):
@@ -103,7 +94,6 @@ class TestDeleteDataset:
         assert r.status_code == 200
         assert r.json()["success"] is True
 
-        # Проверяем что исчез из списка
         r_after = await io_client.post("/dataset/get-datasets-list", json={"start": 0, "end": 5})
         assert len(r_after.json()["datasets"]) == 0
 
@@ -111,11 +101,6 @@ class TestDeleteDataset:
     async def test_delete_nonexistent_returns_404(self, io_client):
         r = await io_client.delete("/dataset/remove-dataset/9999")
         assert r.status_code == 404
-
-
-# ─────────────────────────────────────────────
-# IMAGE ENDPOINTS
-# ─────────────────────────────────────────────
 
 class TestGetImageInfo:
     @pytest.mark.asyncio
@@ -141,7 +126,6 @@ class TestGetImageInfo:
     async def test_get_nonexistent_returns_404(self, io_client):
         r = await io_client.get("/image/image/9999")
         assert r.status_code == 404
-
 
 class TestGetImagesList:
     @pytest.mark.asyncio
@@ -179,7 +163,6 @@ class TestGetImagesList:
     async def test_nonexistent_dataset_returns_404(self, io_client):
         r = await io_client.post("/dataset/get-images-list/9999", json={"start": 0, "end": 10})
         assert r.status_code == 404
-
 
 class TestUploadImage:
     @pytest.mark.asyncio
@@ -236,7 +219,6 @@ class TestUploadImage:
         )
         assert r.status_code == 400
 
-
 class TestRemoveImage:
     @pytest.mark.asyncio
     async def test_remove_existing_image(self, io_client, db_session):
@@ -262,7 +244,6 @@ class TestRemoveImage:
     async def test_remove_nonexistent_returns_404(self, io_client):
         r = await io_client.delete("/image/remove-image/9999")
         assert r.status_code == 404
-
 
 class TestDownloadImage:
     @pytest.mark.asyncio

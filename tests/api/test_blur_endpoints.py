@@ -6,7 +6,6 @@ from unittest.mock import patch
 async def test_gaussian_blur_endpoint_success(client, sample_image):
     """Тест успешного вызова эндпоинта размытия"""
     
-    # Мокаем загрузку и вычисления
     with patch("app.service.IO.image_service.ImageService.load_image_cv2") as mock_load, \
          patch("app.service.computation.filter_service.FilterService.apply_gaussian_blur") as mock_blur:
         

@@ -33,7 +33,6 @@ async def test_create_and_get_dataset(db_session):
 @pytest.mark.asyncio
 async def test_get_datasets_list(db_session):
     service = DatasetService(db_session)
-    # Создаем несколько датасетов
     await service.create_dataset("Dataset 1", "Desc 1")
     await service.create_dataset("Dataset 2", "Desc 2")
     await service.create_dataset("Dataset 3", "Desc 3")
@@ -58,6 +57,5 @@ async def test_delete_dataset(db_session):
     dataset = await service.create_dataset("To Delete", "Desc")
     deleted, _ = await service.delete_dataset(dataset.id)
     assert deleted.id == dataset.id
-    # Проверяем, что датасет удалён
     fetched = await service.get_dataset_by_id(dataset.id)
     assert fetched is None

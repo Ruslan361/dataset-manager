@@ -52,7 +52,6 @@ class TaskService:
         all_tasks = []
         
         for task_id, task in task_manager.tasks.items():
-            # Фильтрация по статусу
             if status_filter and task.status.value != status_filter:
                 continue
                 
@@ -69,10 +68,8 @@ class TaskService:
             }
             all_tasks.append(task_info)
         
-        # Сортировка по времени создания (новые первые)
         all_tasks.sort(key=lambda x: x["created_at"], reverse=True)
         
-        # Пагинация
         total_count = len(all_tasks)
         tasks_page = all_tasks[start:start + limit]
         
@@ -95,7 +92,6 @@ class TaskService:
         if not task:
             return False
         
-        # Можно удалять только завершенные задачи
         if task.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
             raise HTTPException(
                 status_code=400,
@@ -116,12 +112,10 @@ class TaskService:
                 if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
                     tasks_to_remove.append(task_id)
             else:
-                # Отменяем запущенные задачи перед удалением
                 if task.status in [TaskStatus.QUEUED, TaskStatus.PROCESSING]:
                     await task_manager.cancel_task(task_id)
                 tasks_to_remove.append(task_id)
         
-        # Удаляем задачи
         for task_id in tasks_to_remove:
             task_manager.remove_task(task_id)
         

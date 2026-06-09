@@ -21,20 +21,15 @@ async def upload_image(
     file_path = None
     
     try:
-        # Валидация данных загрузки
         upload_form = await _validate_upload_data(file, form_data)
 
-        # Создание директории для сохранения
         upload_dir = FileService.create_upload_directory(upload_form.dataset_id)
         
-        # Генерация уникального имени файла
         unique_filename = FileService.generate_unique_filename(file.filename)
         file_path = upload_dir / unique_filename
         
-        # Сохранение файла
         await FileService.save_upload_file(file, file_path)
         
-        # Создание записи в БД
         image = await image_service.create_image(
             filename=unique_filename,
             original_filename=file.filename,
@@ -48,12 +43,10 @@ async def upload_image(
         )
         
     except HTTPException:
-        # Если произошла HTTP ошибка, делаем rollback
         if file_path:
             FileService.remove_file(file_path)
         raise
     except Exception as e:
-        # Если произошла любая другая ошибка
         logger.error(f"Error uploading image: {str(e)}")
         if file_path:
             FileService.remove_file(file_path)
@@ -70,12 +63,11 @@ async def _validate_upload_data(file: UploadFile, form_data: str) -> ImageUpload
     if not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File type not supported.")
     
-    # Проверка размера файла (например, максимум 10MB)
-    file.file.seek(0, 2)  # Перемещаем курсор в конец файла
+    file.file.seek(0, 2)
     file_size = file.file.tell()
-    file.file.seek(0)  # Возвращаем курсор в начало
+    file.file.seek(0)
     
-    if file_size > 10 * 1024 * 1024:  # 10MB
+    if file_size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large")
     
     return upload_form

@@ -22,7 +22,6 @@ async def get_images_from_dataset(
     image_service = ImageService(db)
     
     try:
-        # Проверяем существование датасета через сервис
         dataset = await dataset_service.get_dataset_by_id(dataset_id)
         if not dataset:
             raise HTTPException(
@@ -30,10 +29,8 @@ async def get_images_from_dataset(
                 detail=f"Dataset with id {dataset_id} not found"
             )
         
-        # Валидация и подготовка параметров сортировки
         sort_column, order_by = _prepare_sort_params(query)
         
-        # Получение изображений через сервис
         images, total_count = await image_service.get_images_from_dataset(
             dataset_id=dataset_id,
             start=query.start,
@@ -60,7 +57,6 @@ async def get_images_from_dataset(
 
 def _prepare_sort_params(query: GetImagesList):
     """Подготовка параметров сортировки"""
-    # Мапинг полей схемы на колонки модели
     sort_mapping = {
         "id": Image.id,
         "filename": Image.filename,
@@ -68,12 +64,10 @@ def _prepare_sort_params(query: GetImagesList):
         "dataset_id": Image.dataset_id
     }
     
-    # Получаем колонку для сортировки
     sort_column = sort_mapping.get(query.sort_field)
     if not sort_column:
         raise HTTPException(status_code=400, detail=f"Invalid sort field: {query.sort_field}")
     
-    # Применяем направление сортировки
     if query.sort_order == SortOrder.DESC:
         order_by = desc(sort_column)
     else:

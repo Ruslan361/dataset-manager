@@ -17,7 +17,6 @@ async def get_image_info(
     image_service = ImageService(db)
     
     try:
-        # Получение изображения через сервис
         image = await image_service.get_image_by_id(image_id)
         if not image:
             raise HTTPException(
@@ -25,7 +24,6 @@ async def get_image_info(
                 detail=f"Image with id {image_id} not found"
             )
         
-        # Возвращаем объект, который автоматически преобразуется в ImageResponse
         return image
         
     except HTTPException:

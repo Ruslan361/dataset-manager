@@ -3,7 +3,6 @@ from sqlalchemy import select
 from app.db.base import Base
 from app.db.session import AsyncSessionLocal
 from app.core.config import settings
-# Импортируем все модели
 from app.models import dataset, image, result
 from app.models.result import Results
 import logging

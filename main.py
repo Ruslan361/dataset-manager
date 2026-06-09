@@ -36,23 +36,19 @@ async def lifespan(app: FastAPI):
     
 app = FastAPI(title="FastAPI Image Processor", lifespan=lifespan)
 
-# --- ИСПРАВЛЕННЫЙ БЛОК CORS ---
 origins = [
-    "http://localhost:5173",     # Vite Localhost
-    "http://127.0.0.1:5173",     # IP версия
-    # Если фронтенд запущен на другом порту, добавьте его сюда явно:
-    # "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # Разрешаем ЛЮБОЙ источник
-    allow_credentials=False,  # ОТКЛЮЧАЕМ проверку кредитов (кук), это снимет строгость
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"] # Это обязательно для скачивания файла
+    expose_headers=["Content-Disposition"]
 )
-# --- КОНЕЦ БЛОКА CORS ---
 
 app.include_router(api_router, prefix="/api/v1")
 

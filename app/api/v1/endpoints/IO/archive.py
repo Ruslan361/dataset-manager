@@ -20,33 +20,27 @@ def _delete_file(path: str):
     except Exception as e:
         logger.warning(f"Could not delete export file {path}: {e}")
 
-# 1. ЗАПУСК ЭКСПОРТА
 @router.post("/export/{dataset_id}")
 async def start_export(
     dataset_id: int,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
-    # Предварительная проверка существования датасета
     dataset = await db.get(Dataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    # Создаем задачу
     task = task_manager.create_task("dataset_export")
     
-    # Запускаем фон (используем обертку с новой сессией)
     background_tasks.add_task(run_export_wrapper, task.task_id, dataset_id)
     
     return {"task_id": task.task_id, "status": "queued"}
 
-# Обертка для запуска сервиса в фоне с новой сессией БД
 async def run_export_wrapper(task_id: str, dataset_id: int):
     async with AsyncSessionLocal() as db:
         service = ArchiveService(db)
         await service.run_export_task(task_id, dataset_id)
 
-# 2. ИМПОРТ
 @router.post("/import")
 async def import_dataset_endpoint(
     file: UploadFile = File(...),
@@ -56,7 +50,6 @@ async def import_dataset_endpoint(
     Импорт датасета из ZIP архива.
     """
     service = ArchiveService(db)
-    # Метод import_dataset сам обрабатывает ошибки и делает rollback/raise HTTPException 500
     new_dataset = await service.import_dataset(file)
     
     return {
@@ -65,7 +58,6 @@ async def import_dataset_endpoint(
         "message": f"Dataset '{new_dataset.title}' imported successfully"
     }
 
-# 3. ПРОВЕРКА СТАТУСА
 @router.get("/status/{task_id}")
 async def get_export_status(task_id: str):
     task = task_manager.get_task(task_id)
@@ -79,7 +71,6 @@ async def get_export_status(task_id: str):
         "error": task.error
     }
 
-# 4. СКАЧИВАНИЕ
 @router.get("/download/{task_id}")
 async def download_export(task_id: str, background_tasks: BackgroundTasks):
     task = task_manager.get_task(task_id)

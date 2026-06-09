@@ -18,7 +18,6 @@ async def create_dataset(
     dataset_service = DatasetService(db)
     
     try:
-        # Создание датасета через сервис
         new_dataset = await dataset_service.create_dataset(
             title=dataset.title,
             description=dataset.description
@@ -30,7 +29,6 @@ async def create_dataset(
         )
         
     except HTTPException:
-        # HTTPException уже обработаны в сервисе
         raise
     except Exception as e:
         logger.error(f"Unexpected error in create_dataset endpoint: {str(e)}")

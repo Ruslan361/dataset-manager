@@ -16,9 +16,6 @@ from app.core.exceptions import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# --- Pydantic Schemas ---
-# (Если у вас есть отдельный файл app/schemas/analysis.py, лучше перенести их туда)
-
 class MeanLinesRequest(BaseModel):
     vertical_lines: List[float]
     horizontal_lines: List[float]
@@ -72,8 +69,6 @@ class CategorizedMeanResponse(BaseModel):
     totalCells: int
     selectedCellsCount: int
 
-# --- Endpoints ---
-
 @router.post("/calculate-mean-lines/{image_id}", response_model=MeanLinesResponse)
 async def calculate_mean_relative_to_lines(
     image_id: int,
@@ -81,29 +76,23 @@ async def calculate_mean_relative_to_lines(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # 1. Загрузка изображения
         image_service = ImageService(db)
         image = await image_service.get_image_by_id(image_id)
         if not image:
             raise ResourceNotFoundError(f"Image {image_id} not found")
         
         file_path = image_service.get_image_file_path(image)
-        # load_image_cv2 выбросит HTTPException(404), если файла нет на диске
         bgr_image = image_service.load_image_cv2(file_path)
         
-        # 2. Вычисления (Чистая логика в BrightnessService)
-        # Этот сервис сам проверит границы, отсортирует линии и вернет матрицу
         calc_result = BrightnessService.calculate_grid_means(
             bgr_image=bgr_image,
             vertical_lines=lines_params.vertical_lines,
             horizontal_lines=lines_params.horizontal_lines
         )
         
-        # 3. Сохранение результата (ResultService)
         result_service = ResultService(db)
         means_list = calc_result["matrix"].tolist()
         
-        # Упаковываем данные в новую структуру (params/data) и сохраняем
         saved_record = await result_service.save_structured_result(
             image_id=image_id,
             method_name="calculate_mean_lines",
@@ -116,7 +105,7 @@ async def calculate_mean_relative_to_lines(
             data={
                 "means": means_list
             },
-            clear_previous=True  # Удаляем старые расчеты для этой картинки
+            clear_previous=True
         )
         
         logger.info(f"Calculated mean lines for image {image_id}, result_id: {saved_record.id}")
@@ -131,7 +120,6 @@ async def calculate_mean_relative_to_lines(
             horizontal_lines=calc_result["horizontal_lines"]
         )
 
-    # Централизованная обработка кастомных исключений
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except InvalidGridError as e:
@@ -144,7 +132,6 @@ async def calculate_mean_relative_to_lines(
         logger.error(f"Unexpected error in calculate-mean-lines: {e}")
         raise HTTPException(status_code=500, detail="Internal server error during analysis")
 
-
 @router.post("/calculate-categorized-mean/{image_id}", response_model=CategorizedMeanResponse)
 async def calculate_categorized_mean(
     image_id: int,
@@ -152,11 +139,9 @@ async def calculate_categorized_mean(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # Валидация входных данных
         if image_id != request.imageID:
             raise DataMismatchError("Image ID in URL and body must match")
             
-        # 1. Загрузка изображения
         image_service = ImageService(db)
         image = await image_service.get_image_by_id(image_id)
         if not image:
@@ -165,15 +150,12 @@ async def calculate_categorized_mean(
         file_path = image_service.get_image_file_path(image)
         bgr_image = image_service.load_image_cv2(file_path)
 
-        # 2. Вычисления
-        # Шаг А: Считаем базовую матрицу яркости
         grid_result = BrightnessService.calculate_grid_means(
             bgr_image=bgr_image,
             vertical_lines=request.verticalLines,
             horizontal_lines=request.horizontalLines
         )
         
-        # Шаг Б: Считаем статистику по категориям
         max_rows = len(grid_result["horizontal_lines"]) - 1
         max_cols = len(grid_result["vertical_lines"]) - 1
         
@@ -185,7 +167,6 @@ async def calculate_categorized_mean(
             max_cols=max_cols
         )
         
-        # 3. Сохранение
         result_service = ResultService(db)
         
         saved_record = await result_service.save_structured_result(
@@ -213,7 +194,7 @@ async def calculate_categorized_mean(
             message=f"Calculated stats for {len(stats_result['categoryResults'])} categories",
             imageId=image_id,
             resultId=saved_record.id,
-            allCellsMean=0.0, # Поле устарело, но нужно для фронтенда
+            allCellsMean=0.0,
             categoryResults=stats_result["categoryResults"],
             overallMean=stats_result["overallMean"] or 0.0,
             verticalLines=grid_result["vertical_lines"],
@@ -234,19 +215,16 @@ async def calculate_categorized_mean(
         logger.error(f"Unexpected error in calculate-categorized-mean: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
 @router.get("/categorized-mean/{image_id}/result")
 async def get_categorized_mean_result(image_id: int, db: AsyncSession = Depends(get_db)):
     """Получение сохраненного результата категоризованного анализа"""
     try:
         result_service = ResultService(db)
         
-        # Получаем запись для метаданных (id, created_at)
         record = await result_service.get_latest_result(image_id, "calculate_categorized_mean")
         if not record:
             raise HTTPException(status_code=404, detail=f"Categorized mean result not found for image {image_id}")
             
-        # Получаем данные (params + data объединены)
         unpacked_data = await result_service.get_latest_result_data(image_id, "calculate_categorized_mean")
         
         return {
@@ -263,7 +241,6 @@ async def get_categorized_mean_result(image_id: int, db: AsyncSession = Depends(
         logger.error(f"Error getting categorized result: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving result")
 
-
 @router.get("/result/{image_id}")
 async def get_manual_result(image_id: int, db: AsyncSession = Depends(get_db)):
     """Получение последнего результата calculate_mean_lines"""
@@ -276,13 +253,11 @@ async def get_manual_result(image_id: int, db: AsyncSession = Depends(get_db)):
         if not record or not flat_data:
             raise HTTPException(status_code=404, detail=f"Manual analysis result not found for image {image_id}")
         
-        # Маппинг для соответствия ожидаемому фронтендом формату
         return {
             "id": record.id,
             "image_id": record.image_id,
             "parameters": {
                 "image_id": record.image_id,
-                # Данные могут быть в params (новая структура) или корне (старая), unpack это уже решил
                 "horizontal_lines": flat_data.get("horizontal_lines", []),
                 "vertical_lines": flat_data.get("vertical_lines", []),
                 "image_width": flat_data.get("image_width", 0),

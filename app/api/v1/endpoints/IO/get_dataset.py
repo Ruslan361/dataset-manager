@@ -19,10 +19,8 @@ async def get_datasets_list(
     dataset_service = DatasetService(db)
     
     try:
-        # Валидация и подготовка параметров сортировки
         sort_column, order_by = _prepare_sort_params(query)
         
-        # Получение данных через сервис
         datasets, total_count = await dataset_service.get_datasets_list(
             start=query.start,
             limit=query.end - query.start,
@@ -47,7 +45,6 @@ async def get_datasets_list(
 
 def _prepare_sort_params(query: GetDatasetsList):
     """Подготовка параметров сортировки"""
-    # Мапинг полей схемы на колонки модели
     sort_mapping = {
         "id": Dataset.id,
         "title": Dataset.title,
@@ -56,12 +53,10 @@ def _prepare_sort_params(query: GetDatasetsList):
         "updated_at": Dataset.updated_at
     }
     
-    # Получаем колонку для сортировки
     sort_column = sort_mapping.get(query.sort_field)
     if not sort_column:
         raise HTTPException(status_code=400, detail=f"Invalid sort field: {query.sort_field}")
     
-    # Применяем направление сортировки
     if query.sort_order == SortOrder.DESC:
         order_by = desc(sort_column)
     else:

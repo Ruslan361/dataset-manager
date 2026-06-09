@@ -51,17 +51,14 @@ class ArchiveService(BaseService):
             manifest_images = []
 
             for img in images:
-                # 1. Копируем изображение
                 src_img_path = self.image_service.get_image_file_path(img)
                 if src_img_path.exists():
                     shutil.copy2(src_img_path, images_dir / img.filename)
                 
-                # 2. Обрабатываем результаты
                 img_results = results_map.get(img.id, [])
                 export_results = []
                 
                 for res in img_results:
-                    # Копируем JSON, чтобы не менять объект SQLAlchemy
                     res_json = json.loads(json.dumps(res.result)) if res.result else {}
                     resources = res_json.get("resources", [])
                     new_resources = []
@@ -70,11 +67,9 @@ class ArchiveService(BaseService):
                         if r.get("type") == "image" and "path" in r:
                             orig_path = Path(r["path"])
                             if orig_path.exists():
-                                # Уникальное имя файла для архива
                                 archive_res_name = f"{img.id}_{uuid.uuid4().hex[:8]}_{orig_path.name}"
                                 shutil.copy2(orig_path, results_dir / archive_res_name)
                                 
-                                # Обновляем путь на относительный
                                 r_copy = r.copy()
                                 r_copy["path"] = f"results/{archive_res_name}"
                                 new_resources.append(r_copy)
@@ -95,7 +90,6 @@ class ArchiveService(BaseService):
                     results=export_results
                 ))
 
-            # 3. Создаем манифест
             manifest = DatasetExportManifest(
                 title=dataset.title,
                 description=dataset.description,
@@ -106,16 +100,13 @@ class ArchiveService(BaseService):
             with open(temp_dir / "manifest.json", "w", encoding='utf-8') as f:
                 f.write(manifest.model_dump_json(indent=2))
 
-            # 4. Упаковываем в ZIP
             export_dir = Path("exports")
             export_dir.mkdir(exist_ok=True)
             
-            # Имя итогового файла
             safe_title = "".join([c for c in dataset.title if c.isalnum() or c in (' ', '-', '_')]).strip()
             zip_filename = f"dataset_{dataset.id}_{safe_title}"
             zip_path = export_dir / zip_filename 
             
-            # make_archive добавляет .zip автоматически
             shutil.make_archive(str(zip_path), 'zip', temp_dir)
             
             return str(zip_path.with_suffix('.zip'))
@@ -131,14 +122,12 @@ class ArchiveService(BaseService):
         try:
             task_manager.update_task(task_id, TaskStatus.PROCESSING, "Collecting data from DB...")
             
-            # 1. Сбор данных (IO/DB bound)
             dataset = await self.db.get(Dataset, dataset_id)
             if not dataset:
                 raise Exception("Dataset not found")
             
             images = await self.image_service.get_images_by_dataset(dataset_id)
             
-            # ОПТИМИЗАЦИЯ: Загружаем все результаты одним запросом
             image_ids = [img.id for img in images]
             results_map = defaultdict(list)
             
@@ -150,7 +139,6 @@ class ArchiveService(BaseService):
 
             task_manager.update_task(task_id, TaskStatus.PROCESSING, f"Compressing {len(images)} images...")
 
-            # 2. Создание архива (CPU/Disk IO bound -> в executor)
             temp_dir = Path(f"temp_export_{task_id}")
             
             try:
@@ -171,7 +159,6 @@ class ArchiveService(BaseService):
                     result={"file_path": zip_path, "filename": Path(zip_path).name}
                 )
             finally:
-                # Очистка временной папки
                 if temp_dir.exists():
                     await loop.run_in_executor(get_executor(), shutil.rmtree, temp_dir)
 
@@ -193,7 +180,6 @@ class ArchiveService(BaseService):
                 while content := await file.read(1024 * 1024):
                     await f.write(content)
 
-            # 2. Распаковка (CPU/Disk IO bound -> executor)
             await loop.run_in_executor(
                 get_executor(), 
                 shutil.unpack_archive, 
@@ -202,7 +188,6 @@ class ArchiveService(BaseService):
                 'zip'
             )
 
-            # 3. Чтение манифеста
             manifest_path = temp_dir / "manifest.json"
             if not manifest_path.exists():
                 raise HTTPException(status_code=400, detail="Invalid archive: manifest.json missing")
@@ -211,7 +196,6 @@ class ArchiveService(BaseService):
                 data = json.load(f)
                 manifest = DatasetExportManifest(**data)
 
-            # 4. Создание структуры в БД
             new_dataset = Dataset(
                 title=f"{manifest.title} (Imported {datetime.now().strftime('%d.%m %H:%M')})",
                 description=manifest.description
@@ -220,24 +204,19 @@ class ArchiveService(BaseService):
             await self.db.commit()
             await self.db.refresh(new_dataset)
 
-            # Папки для файлов
             new_images_dir = Path(f"uploads/images/{new_dataset.id}")
             new_results_dir = Path(f"uploads/results/{new_dataset.id}")
             new_images_dir.mkdir(parents=True, exist_ok=True)
             new_results_dir.mkdir(parents=True, exist_ok=True)
 
-            # 5. Импорт данных
             for img_item in manifest.images:
-                # Новое имя файла
                 ext = Path(img_item.filename).suffix
                 new_filename = f"{uuid.uuid4()}{ext}"
                 
-                # Копирование (File IO)
                 src_img = temp_dir / "images" / img_item.filename
                 if src_img.exists():
                     shutil.copy2(src_img, new_images_dir / new_filename)
                 
-                # Запись в БД
                 new_image = Image(
                     filename=new_filename,
                     original_filename=img_item.original_filename,
@@ -247,7 +226,6 @@ class ArchiveService(BaseService):
                 await self.db.commit()
                 await self.db.refresh(new_image)
 
-                # Результаты
                 for res_item in img_item.results:
                     res_data = res_item.result_data
                     resources = res_data.get("resources", [])
@@ -255,7 +233,6 @@ class ArchiveService(BaseService):
                     
                     for r in resources:
                         if r.get("type") == "image" and "path" in r:
-                            # Относительный путь из манифеста -> Абсолютный временный путь
                             rel_path = r["path"] # "results/filename.jpg"
                             src_res_file = temp_dir / rel_path
                             
@@ -264,7 +241,6 @@ class ArchiveService(BaseService):
                                 dest_path = new_results_dir / new_res_filename
                                 shutil.copy2(src_res_file, dest_path)
                                 
-                                # Обновляем путь на новый абсолютный
                                 r_copy = r.copy()
                                 r_copy["path"] = str(dest_path)
                                 new_resources.append(r_copy)
@@ -286,7 +262,6 @@ class ArchiveService(BaseService):
         except Exception as e:
             await self.rollback_db()
             logger.error(f"Import failed: {e}")
-            # ИСПРАВЛЕНО: сообщение об ошибке теперь начинается с "Import failed"
             raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
         finally:
             if temp_dir.exists():

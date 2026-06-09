@@ -13,8 +13,7 @@ from app.core.exceptions import ResourceNotFoundError, CalculationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-from app.core.executor import get_executor # <--- Импорт
-# Отдельный экзекьютор для CPU-задач (можно вынести в app.core)
+from app.core.executor import get_executor
 executor = get_executor()
 
 class GaussianBlurRequest(BaseModel):
@@ -30,7 +29,6 @@ async def apply_gaussian_blur(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # 1. Загрузка (быстро, в основном IO)
         image_service = ImageService(db)
         image = await image_service.get_image_by_id(image_id)
         if not image:
@@ -39,7 +37,6 @@ async def apply_gaussian_blur(
         file_path = image_service.get_image_file_path(image)
         bgr_image = image_service.load_image_cv2(file_path)
         
-        # 2. Вычисления в отдельном потоке (чтобы не блокировать async loop)
         loop = asyncio.get_running_loop()
         image_bytes = await loop.run_in_executor(
             executor,

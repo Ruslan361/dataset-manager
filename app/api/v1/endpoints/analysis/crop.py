@@ -15,17 +15,14 @@ from app.schemas.result import ResultResponse
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
 class AutoCropRequest(BaseModel):
     image_id: int
-
 
 class Crop(BaseModel):
     top: int
     bottom: int
     left: int
     right: int
-
 
 @router.post("/auto-crop", response_model=ResultResponse)
 async def auto_crop_image(
@@ -52,7 +49,6 @@ async def auto_crop_image(
         message="Image cropped successfully",
         data=Crop(top=top, bottom=bottom, left=left, right=right)
     )
-
 
 @router.post("/crop-image/{image_id}", response_model=ResultResponse)
 async def crop_image(
@@ -81,7 +77,6 @@ async def crop_image(
         data=None
     )
 
-
 @router.get("/get-crop/{image_id}", response_model=ResultResponse)
 async def get_crop_results(
     image_id: int,
@@ -105,7 +100,6 @@ async def get_crop_results(
             )
         )
 
-    # Нет сохранённых данных — запускаем авто-кроп и сохраняем результат
     image_record = await image_service.get_image_by_id(image_id)
     if not image_record:
         raise HTTPException(status_code=404, detail="Image not found")

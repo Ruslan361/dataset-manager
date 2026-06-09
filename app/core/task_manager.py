@@ -15,7 +15,7 @@ class Task:
         self.task_type = task_type
         self.status = TaskStatus.QUEUED
         self.created_at = datetime.now()
-        self.result: Optional[Dict[str, Any]] = None # Здесь будет путь к файлу
+        self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
         self.message: str = "Initialized"
 
@@ -39,5 +39,4 @@ class TaskManager:
             if result: task.result = result
             if error: task.error = error
 
-# Глобальный инстанс
 task_manager = TaskManager()

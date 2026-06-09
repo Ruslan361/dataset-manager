@@ -28,11 +28,9 @@ class ResultService(BaseService):
         if not isinstance(db_json, dict):
             return db_json or {}
         
-        # Поддержка новой структуры
         if "params" in db_json and "data" in db_json:
             return {**db_json["params"], **db_json["data"]}
         
-        # Поддержка старой структуры (backward compatibility)
         return db_json
 
     async def get_latest_result(self, image_id: int, method_name: str) -> Optional[Results]:
@@ -76,7 +74,6 @@ class ResultService(BaseService):
         :param clear_previous: Если True, удаляет все старые результаты этого метода для данного изображения.
         """
         try:
-            # 1. Очистка старых записей
             if clear_previous:
                 old_results_query = select(Results).where(
                     Results.name_method == method_name,
@@ -85,12 +82,9 @@ class ResultService(BaseService):
                 result = await self.db.execute(old_results_query)
                 for record in result.scalars().all():
                     await self.db.delete(record)
-                    # Примечание: файлы удалятся автоматически через event listener в модели Results
             
-            # 2. Упаковка
             packed_json = self._pack(params, data, resources)
             
-            # 3. Сохранение
             new_result = Results(
                 image_id=image_id,
                 name_method=method_name,
@@ -120,7 +114,6 @@ class ResultService(BaseService):
         Это нужно вызвать ДО запуска фоновой задачи.
         """
         try:
-            # 1. Очистка старых, если нужно
             if clear_previous:
                 old_results = await self.db.execute(
                     select(Results).where(
@@ -131,14 +124,12 @@ class ResultService(BaseService):
                 for record in old_results.scalars().all():
                     await self.db.delete(record)
             
-            # 2. Формируем JSON со статусом
             initial_json = self._pack(
                 params=params,
-                data={"status": "processing", "progress": 0}, # Флаг процессинга
+                data={"status": "processing", "progress": 0},
                 resources=[]
             )
             
-            # 3. Создаем запись
             new_result = Results(
                 image_id=image_id,
                 name_method=method_name,
@@ -165,21 +156,17 @@ class ResultService(BaseService):
         Обновляет уже созданную запись (когда задача завершилась).
         """
         try:
-            # Получаем текущую запись, чтобы сохранить params
             query = select(Results).where(Results.id == result_id)
             res = await self.db.execute(query)
             record = res.scalar_one_or_none()
             
             if not record:
-                # Если запись удалили пока шла задача
                 logger.warning(f"Result {result_id} not found during update")
                 return None
 
-            # Берем старые params, чтобы не потерять их
             current_json = record.result or {}
             params = current_json.get("params", {})
             
-            # Формируем новый JSON (status перезапишется данными)
             new_json = self._pack(params, data, resources)
             
             record.result = new_json
@@ -190,7 +177,6 @@ class ResultService(BaseService):
         except Exception as e:
             await self.rollback_db()
             logger.error(f"Error updating result {result_id}: {e}")
-            # Не рейзим HTTP ошибку, т.к. это выполняется в фоне
             return None
 
     async def mark_as_failed(self, result_id: int, error_message: str):

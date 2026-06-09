@@ -36,12 +36,10 @@ class ImageService(BaseService):
     ) -> tuple[List[Image], int]:
         """Получение списка изображений из датасета с пагинацией"""
         try:
-            # Подсчет общего количества
             count_query = select(func.count(Image.id)).where(Image.dataset_id == dataset_id)
             count_result = await self.db.execute(count_query)
             total_count = count_result.scalar()
             
-            # Получение изображений
             images_query = select(Image)\
                 .where(Image.dataset_id == dataset_id)\
                 .order_by(order_by)\
@@ -105,12 +103,10 @@ class ImageService(BaseService):
     async def delete_images_by_dataset(self, dataset_id: int) -> int:
         """Удаление всех изображений датасета"""
         try:
-            # Подсчет количества изображений
             images_count_query = select(Image).where(Image.dataset_id == dataset_id)
             images_result = await self.db.execute(images_count_query)
             images_count = len(images_result.scalars().all())
             
-            # Удаление записей
             await self.db.execute(delete(Image).where(Image.dataset_id == dataset_id))
             
             return images_count

@@ -53,7 +53,6 @@ async def cleanup_empty_result_directories(dataset_id: int):
                 result_dir.rmdir()
                 logger.info(f"Removed empty result directory: {result_dir}")
                 
-                # Проверяем родительскую директорию
                 parent_dir = result_dir.parent
                 if parent_dir.name == "results" and parent_dir.exists():
                     remaining_subdirs = list(parent_dir.glob("*"))
@@ -72,7 +71,6 @@ async def remove_image(
     image_service = ImageService(db)
     
     try:
-        # Получение изображения
         image = await image_service.get_image_by_id(image_id)
         if not image:
             raise HTTPException(
@@ -80,24 +78,18 @@ async def remove_image(
                 detail=f"Image with id {image_id} not found"
             )
         
-        # Сохраняем dataset_id для очистки директорий
         dataset_id = image.dataset_id
         
-        # Получение пути к файлу
         file_path = image_service.get_image_file_path(image)
         
-        # Удаление всех связанных результатов (K-means и других)
         await delete_all_image_results(db, image_id)
         
-        # Удаление записи из БД
         deleted_image = await image_service.delete_image(image_id)
         
-        # Удаление физического файла
         file_deleted = FileService.remove_file(file_path)
         if not file_deleted:
             logger.warning(f"File not found or couldn't be deleted: {file_path}")
         
-        # Очистка пустых директорий результатов
         await cleanup_empty_result_directories(dataset_id)
         
         logger.info(f"Image {image_id} and all its results deleted successfully")

@@ -34,7 +34,6 @@ class GetImagesList(BaseModel):
             raise ValueError('end must be greater than start')
         return v
 
-
 class ImageResponse(BaseModel):
     id: int
     filename: str

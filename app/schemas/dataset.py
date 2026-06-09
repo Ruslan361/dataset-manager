@@ -7,7 +7,6 @@ class CreateDatasetForm(BaseModel):
     title: str
     description: Optional[str] = None
 
-
 class UpdateDatasetForm(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -24,7 +23,6 @@ class DatasetResponse(BaseModel):
 
 class ResponseDatasetsList(BaseModel):
     datasets: list[DatasetResponse]
-
 
 class SortOrder(str, Enum):
     ASC = "asc"

@@ -4,17 +4,17 @@ from datetime import datetime
 
 class ResultExportItem(BaseModel):
     name_method: str
-    result_data: Dict[str, Any]  # Полный JSON из БД (params, data, resources)
+    result_data: Dict[str, Any]
     created_at: str
 
 class ImageExportItem(BaseModel):
     original_filename: str
-    filename: str  # Имя файла внутри архива в папке images/
+    filename: str
     results: List[ResultExportItem]
 
 class DatasetExportManifest(BaseModel):
     title: str
-    description: Optional[str] = None  # Исправлено: добавлено значение по умолчанию
+    description: Optional[str] = None
     created_at: str
     images: List[ImageExportItem]
     version: str = "1.0"
