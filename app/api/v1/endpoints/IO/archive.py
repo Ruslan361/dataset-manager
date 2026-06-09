@@ -89,6 +89,9 @@ async def download_export(task_id: str, background_tasks: BackgroundTasks):
     file_path = task.result.get("file_path")
     filename = task.result.get("filename", "export.zip")
 
+    if not file_path or not Path(file_path).exists():
+        raise HTTPException(status_code=404, detail="Export file not found or already downloaded")
+
     background_tasks.add_task(_delete_file, file_path)
 
     return FileResponse(
