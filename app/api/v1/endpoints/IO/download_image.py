@@ -40,7 +40,8 @@ async def download_image(
         return FileResponse(
             path=str(file_path),
             filename=image.original_filename,
-            media_type="image/*"
+            media_type="image/*",
+            headers={"Cache-Control": "no-store"}
         )
         
     except HTTPException:

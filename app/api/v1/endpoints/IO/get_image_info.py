@@ -8,7 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.get("/image/{image_id}", response_model=ImageResponse)
+@router.get("/{image_id}", response_model=ImageResponse)
 async def get_image_info(
     image_id: int,
     db: AsyncSession = Depends(get_db)
